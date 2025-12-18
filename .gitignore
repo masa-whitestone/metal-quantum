@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+build/
+dist/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Xcode / Metal
+*.dylib
+*.metallib
+*.air
+
+# Project specific
+metalq/python/metalq/lib/
+# Wait, we want to include lib if we distribute binary wheels, but source repo usually builds them.
+# For now, ignore them in source control as they are build artifacts.
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
