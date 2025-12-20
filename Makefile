@@ -19,6 +19,7 @@ OBJC_SRCS = $(SRC_DIR)/metalq.m \
             $(SRC_DIR)/measurement.m
 
 METAL_SRC = $(SRC_DIR)/shaders/quantum_gates.metal
+MEASUREMENT_METAL_SRC = $(SRC_DIR)/shaders/measurement.metal
 
 # Output
 DYLIB = $(BUILD_DIR)/libmetalq.dylib
@@ -31,12 +32,15 @@ all: dirs $(DYLIB) $(METALLIB_OUT)
 dirs:
 	mkdir -p $(BUILD_DIR)
 
-# Compile Metal shaders
+# Compile Metal shaders (both quantum_gates and measurement)
 $(BUILD_DIR)/quantum_gates.air: $(METAL_SRC)
 	$(METAL) -c $< -o $@
 
-$(METALLIB_OUT): $(BUILD_DIR)/quantum_gates.air
-	$(METALLIB) $< -o $@
+$(BUILD_DIR)/measurement.air: $(MEASUREMENT_METAL_SRC)
+	$(METAL) -c $< -o $@
+
+$(METALLIB_OUT): $(BUILD_DIR)/quantum_gates.air $(BUILD_DIR)/measurement.air
+	$(METALLIB) $(BUILD_DIR)/quantum_gates.air $(BUILD_DIR)/measurement.air -o $@
 
 # Build dynamic library
 $(DYLIB): $(OBJC_SRCS)

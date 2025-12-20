@@ -54,6 +54,8 @@ typedef struct {
   id<MTLComputePipelineState> _controlledGatePipeline;
 }
 
+@synthesize library = _library;
+
 - (instancetype)initWithDevice:(id<MTLDevice>)device
                   commandQueue:(id<MTLCommandQueue>)commandQueue {
   self = [super init];

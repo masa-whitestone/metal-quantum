@@ -1,26 +1,37 @@
 /**
- * measurement.h
+ * measurement.h - GPU-accelerated Measurement
  */
 
 #import "metalq.h"
 #import "state_vector.h"
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 
 @interface MetalQMeasurement : NSObject
 
 /**
- * Sample from state vector
- *
- * @param stateVector State vector
- * @param measurements Measurement list [(qubit, clbit), ...]
- * @param numClbits Number of classical bits
- * @param shots Number of shots
- * @param results Results dictionary (output)
+ * Initialize with Metal device for GPU-accelerated sampling
  */
-+ (MetalQError)sampleFromStateVector:(MetalQStateVector *)stateVector
+- (instancetype)initWithDevice:(id<MTLDevice>)device
+                  commandQueue:(id<MTLCommandQueue>)commandQueue
+                       library:(id<MTLLibrary>)library;
+
+/**
+ * GPU-accelerated sampling from state vector
+ */
+- (MetalQError)sampleFromStateVector:(MetalQStateVector *)stateVector
                         measurements:(NSArray *)measurements
                            numClbits:(int)numClbits
                                shots:(int)shots
                              results:(NSMutableDictionary *)results;
+
+/**
+ * CPU fallback (class method for when GPU is unavailable)
+ */
++ (MetalQError)sampleFromStateVectorCPU:(MetalQStateVector *)stateVector
+                           measurements:(NSArray *)measurements
+                              numClbits:(int)numClbits
+                                  shots:(int)shots
+                                results:(NSMutableDictionary *)results;
 
 @end

@@ -9,6 +9,8 @@
 
 @interface MetalQGateExecutor : NSObject
 
+@property(nonatomic, readonly) id<MTLLibrary> library;
+
 - (instancetype)initWithDevice:(id<MTLDevice>)device
                   commandQueue:(id<MTLCommandQueue>)commandQueue;
 
