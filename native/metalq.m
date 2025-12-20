@@ -12,7 +12,9 @@
 // Global state
 static id<MTLDevice> g_device = nil;
 static id<MTLCommandQueue> g_commandQueue = nil;
+static id<MTLLibrary> g_library = nil;
 static MetalQGateExecutor *g_gateExecutor = nil;
+static MetalQMeasurement *g_measurement = nil;
 static BOOL g_initialized = NO;
 
 #pragma mark - Initialization
@@ -44,6 +46,14 @@ int metalq_init(void) {
       NSLog(@"Metal-Q: Failed to initialize gate executor");
       return METALQ_ERROR_INIT_FAILED;
     }
+
+    // Get library from gate executor for measurement shaders
+    g_library = [g_gateExecutor library];
+
+    // Initialize GPU measurement
+    g_measurement = [[MetalQMeasurement alloc] initWithDevice:g_device
+                                                 commandQueue:g_commandQueue
+                                                      library:g_library];
 
     g_initialized = YES;
     // NSLog(@"Metal-Q: Initialized successfully on %@", g_device.name);
@@ -106,13 +116,24 @@ int metalq_run_circuit(const char *circuit_json, int shots, char **result_json,
       }
     }
 
-    // Measurement
+    // Measurement (GPU-accelerated if available)
     NSMutableDictionary *counts = [NSMutableDictionary dictionary];
-    MetalQError err = [MetalQMeasurement sampleFromStateVector:stateVector
-                                                  measurements:measurements
-                                                     numClbits:numClbits
-                                                         shots:shots
-                                                       results:counts];
+    MetalQError err;
+
+    if (g_measurement) {
+      err = [g_measurement sampleFromStateVector:stateVector
+                                    measurements:measurements
+                                       numClbits:numClbits
+                                           shots:shots
+                                         results:counts];
+    } else {
+      // Fallback to CPU
+      err = [MetalQMeasurement sampleFromStateVectorCPU:stateVector
+                                           measurements:measurements
+                                              numClbits:numClbits
+                                                  shots:shots
+                                                results:counts];
+    }
 
     if (err != METALQ_SUCCESS) {
       return err;
