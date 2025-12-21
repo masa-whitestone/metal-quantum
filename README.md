@@ -20,7 +20,7 @@ Metal-Q is a drop-in replacement for Qiskit's statevector simulator, optimized f
 
 ## Performance
 
-Benchmarked on Apple M2 Pro (16GB RAM):
+Benchmarked on Apple M3 Pro (16GB RAM):
 
 ### Statevector Simulation
 
