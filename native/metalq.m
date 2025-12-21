@@ -107,13 +107,11 @@ int metalq_run_circuit(const char *circuit_json, int shots, char **result_json,
       return METALQ_ERROR_OUT_OF_MEMORY;
     }
 
-    // Apply gates
-    for (NSDictionary *gateData in gates) {
-      MetalQError err = [g_gateExecutor applyGate:gateData
-                                    toStateVector:stateVector];
-      if (err != METALQ_SUCCESS) {
-        return err;
-      }
+    // Apply gates (batched - single command buffer for all gates)
+    MetalQError gateErr = [g_gateExecutor executeGatesBatched:gates
+                                                  stateVector:stateVector];
+    if (gateErr != METALQ_SUCCESS) {
+      return gateErr;
     }
 
     // Measurement (GPU-accelerated if available)

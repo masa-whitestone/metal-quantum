@@ -1,22 +1,56 @@
 [project]
-name = "metalq"
+name = "metal-q"
 version = "0.1.0"
-description = "Quantum circuit simulator on Apple Silicon Metal"
+description = "High-performance quantum circuit simulator for Apple Silicon using Metal GPU"
 readme = "README.md"
-requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Metal-Q Contributors"}
+]
+keywords = [
+    "quantum",
+    "quantum-computing",
+    "simulator",
+    "qiskit",
+    "apple-silicon",
+    "metal",
+    "gpu",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.9"
 dependencies = [
-    "qiskit>=1.0.0",
-    "numpy>=1.20.0",
+    "numpy>=1.21.0",
+    "qiskit>=2.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "qiskit-aer",
-    "dill",
-    "jupyter",
-    "notebook"
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "qiskit-aer>=0.13.0",
 ]
+benchmark = [
+    "qiskit-aer>=0.13.0",
+    "matplotlib>=3.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/masa-whitestone/metal-quantum"
+Documentation = "https://github.com/masa-whitestone/metal-quantum#readme"
+Repository = "https://github.com/masa-whitestone/metal-quantum.git"
+Issues = "https://github.com/masa-whitestone/metal-quantum/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -27,3 +61,8 @@ packages = ["metalq/python/metalq"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "metalq/python/metalq/lib" = "metalq/lib"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"

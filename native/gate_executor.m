@@ -233,9 +233,225 @@ typedef struct {
   return METALQ_ERROR_UNSUPPORTED_GATE;
 }
 
-#pragma mark - Matrix Parsing
+#pragma mark - Batched Execution
 
-#pragma mark - Gate Matrix Helpers
+- (MetalQError)executeGatesBatched:(NSArray *)gates
+                       stateVector:(MetalQStateVector *)stateVector {
+
+  if (gates.count == 0) {
+    return METALQ_SUCCESS;
+  }
+
+  @autoreleasepool {
+    // Create a single command buffer for all gates
+    id<MTLCommandBuffer> cmdBuffer = [_commandQueue commandBuffer];
+    if (!cmdBuffer) {
+      NSLog(@"Metal-Q: Failed to create command buffer");
+      return METALQ_ERROR_GPU_ERROR;
+    }
+
+    // Encode all gates to the command buffer
+    for (NSDictionary *gateData in gates) {
+      MetalQError err = [self _encodeGateToBuffer:cmdBuffer
+                                         gateData:gateData
+                                      stateVector:stateVector];
+      if (err != METALQ_SUCCESS) {
+        NSLog(@"Metal-Q: Gate encoding failed");
+        return err;
+      }
+    }
+
+    // Commit and wait only once at the end
+    [cmdBuffer commit];
+    [cmdBuffer waitUntilCompleted];
+
+    if (cmdBuffer.status == MTLCommandBufferStatusError) {
+      NSLog(@"Metal-Q: Command buffer execution failed: %@", cmdBuffer.error);
+      return METALQ_ERROR_GPU_ERROR;
+    }
+  }
+
+  return METALQ_SUCCESS;
+}
+
+- (MetalQError)_encodeGateToBuffer:(id<MTLCommandBuffer>)cmdBuffer
+                          gateData:(NSDictionary *)gateData
+                       stateVector:(MetalQStateVector *)stateVector {
+
+  NSString *name = gateData[@"name"];
+  NSArray *qubits = gateData[@"qubits"];
+  NSArray *params = gateData[@"params"];
+  id matrixObj = gateData[@"matrix"];
+  NSArray *matrixData = (matrixObj != [NSNull null]) ? matrixObj : nil;
+
+  id<MTLComputeCommandEncoder> encoder = [cmdBuffer computeCommandEncoder];
+  if (!encoder) {
+    return METALQ_ERROR_GPU_ERROR;
+  }
+
+  MetalQError err = METALQ_SUCCESS;
+
+  if ([qubits count] == 1) {
+    if ([self _isControlledGate:name]) {
+      err = METALQ_ERROR_INVALID_CIRCUIT;
+    } else {
+      GateMatrix1Q matrix1Q;
+      if (matrixData) {
+        [self _parseMatrix1Q:matrixData result:&matrix1Q];
+      } else {
+        [self _getGateMatrix1Q:name params:params result:&matrix1Q];
+      }
+      [self _encode1QGate:encoder
+                   matrix:&matrix1Q
+                   target:[qubits[0] intValue]
+              stateVector:stateVector];
+    }
+  } else if ([qubits count] == 2) {
+    if ([self _isControlledGate:name]) {
+      GateMatrix1Q baseGate;
+      NSString *baseName = [self _baseGateName:name];
+      [self _getGateMatrix1Q:baseName params:params result:&baseGate];
+      [self _encodeControlledGate:encoder
+                           matrix:&baseGate
+                          control:[qubits[0] intValue]
+                           target:[qubits[1] intValue]
+                      stateVector:stateVector];
+    } else {
+      GateMatrix2Q matrix2Q;
+      if (matrixData) {
+        [self _parseMatrix2Q:matrixData result:&matrix2Q];
+      } else {
+        [self _getGateMatrix2Q:name params:params result:&matrix2Q];
+      }
+      [self _encode2QGate:encoder
+                   matrix:&matrix2Q
+                   qubit0:[qubits[0] intValue]
+                   qubit1:[qubits[1] intValue]
+              stateVector:stateVector];
+    }
+  } else if ([qubits count] == 3) {
+    GateMatrix3Q matrix3Q;
+    if (matrixData) {
+      [self _parseMatrix3Q:matrixData result:&matrix3Q];
+    } else {
+      [self _getGateMatrix3Q:name params:params result:&matrix3Q];
+    }
+    [self _encode3QGate:encoder
+                 matrix:&matrix3Q
+                 qubit0:[qubits[0] intValue]
+                 qubit1:[qubits[1] intValue]
+                 qubit2:[qubits[2] intValue]
+            stateVector:stateVector];
+  } else {
+    err = METALQ_ERROR_UNSUPPORTED_GATE;
+  }
+
+  [encoder endEncoding];
+  return err;
+}
+
+- (void)_encode1QGate:(id<MTLComputeCommandEncoder>)encoder
+               matrix:(GateMatrix1Q *)matrix
+               target:(int)target
+          stateVector:(MetalQStateVector *)sv {
+
+  [encoder setComputePipelineState:_gate1QPipeline];
+  [encoder setBuffer:sv.realBuffer offset:0 atIndex:0];
+  [encoder setBuffer:sv.imagBuffer offset:0 atIndex:1];
+  [encoder setBytes:matrix length:sizeof(GateMatrix1Q) atIndex:2];
+
+  GateParams params = {.targetQubit = (uint32_t)target,
+                       .controlQubit = UINT32_MAX,
+                       .numQubits = (uint32_t)sv.numQubits,
+                       .stateSize = (uint32_t)sv.size};
+  [encoder setBytes:&params length:sizeof(GateParams) atIndex:3];
+
+  NSUInteger threadCount = sv.size / 2;
+  MTLSize gridSize = MTLSizeMake(threadCount, 1, 1);
+  MTLSize threadGroupSize = MTLSizeMake(
+      MIN(256, _gate1QPipeline.maxTotalThreadsPerThreadgroup), 1, 1);
+
+  [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadGroupSize];
+}
+
+- (void)_encodeControlledGate:(id<MTLComputeCommandEncoder>)encoder
+                       matrix:(GateMatrix1Q *)matrix
+                      control:(int)control
+                       target:(int)target
+                  stateVector:(MetalQStateVector *)sv {
+
+  [encoder setComputePipelineState:_controlledGatePipeline];
+  [encoder setBuffer:sv.realBuffer offset:0 atIndex:0];
+  [encoder setBuffer:sv.imagBuffer offset:0 atIndex:1];
+  [encoder setBytes:matrix length:sizeof(GateMatrix1Q) atIndex:2];
+
+  GateParams params = {.targetQubit = (uint32_t)target,
+                       .controlQubit = (uint32_t)control,
+                       .numQubits = (uint32_t)sv.numQubits,
+                       .stateSize = (uint32_t)sv.size};
+  [encoder setBytes:&params length:sizeof(GateParams) atIndex:3];
+
+  NSUInteger threadCount = sv.size / 4;
+  MTLSize gridSize = MTLSizeMake(threadCount, 1, 1);
+  MTLSize threadGroupSize = MTLSizeMake(
+      MIN(256, _controlledGatePipeline.maxTotalThreadsPerThreadgroup), 1, 1);
+
+  [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadGroupSize];
+}
+
+- (void)_encode2QGate:(id<MTLComputeCommandEncoder>)encoder
+               matrix:(GateMatrix2Q *)matrix
+               qubit0:(int)qubit0
+               qubit1:(int)qubit1
+          stateVector:(MetalQStateVector *)sv {
+
+  [encoder setComputePipelineState:_gate2QPipeline];
+  [encoder setBuffer:sv.realBuffer offset:0 atIndex:0];
+  [encoder setBuffer:sv.imagBuffer offset:0 atIndex:1];
+  [encoder setBytes:matrix length:sizeof(GateMatrix2Q) atIndex:2];
+
+  GateParams params = {.targetQubit = (uint32_t)qubit0,
+                       .controlQubit = (uint32_t)qubit1,
+                       .numQubits = (uint32_t)sv.numQubits,
+                       .stateSize = (uint32_t)sv.size};
+  [encoder setBytes:&params length:sizeof(GateParams) atIndex:3];
+
+  NSUInteger threadCount = sv.size / 4;
+  MTLSize gridSize = MTLSizeMake(threadCount, 1, 1);
+  MTLSize threadGroupSize = MTLSizeMake(
+      MIN(256, _gate2QPipeline.maxTotalThreadsPerThreadgroup), 1, 1);
+
+  [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadGroupSize];
+}
+
+- (void)_encode3QGate:(id<MTLComputeCommandEncoder>)encoder
+               matrix:(GateMatrix3Q *)matrix
+               qubit0:(int)q0
+               qubit1:(int)q1
+               qubit2:(int)q2
+          stateVector:(MetalQStateVector *)sv {
+
+  [encoder setComputePipelineState:_gate3QPipeline];
+  [encoder setBuffer:sv.realBuffer offset:0 atIndex:0];
+  [encoder setBuffer:sv.imagBuffer offset:0 atIndex:1];
+  [encoder setBytes:matrix length:sizeof(GateMatrix3Q) atIndex:2];
+
+  GateParams params = {.targetQubit = (uint32_t)q0,
+                       .controlQubit = (uint32_t)q1,
+                       .extraQubit = (uint32_t)q2,
+                       .numQubits = (uint32_t)sv.numQubits,
+                       .stateSize = (uint32_t)sv.size};
+  [encoder setBytes:&params length:sizeof(GateParams) atIndex:3];
+
+  NSUInteger threadCount = sv.size / 8;
+  MTLSize gridSize = MTLSizeMake(threadCount, 1, 1);
+  MTLSize threadGroupSize = MTLSizeMake(
+      MIN(256, _gate3QPipeline.maxTotalThreadsPerThreadgroup), 1, 1);
+
+  [encoder dispatchThreads:gridSize threadsPerThreadgroup:threadGroupSize];
+}
+
+#pragma mark - Matrix Parsing
 
 - (void)_getGateMatrix1Q:(NSString *)name
                   params:(NSArray *)params

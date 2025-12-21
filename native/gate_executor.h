@@ -15,13 +15,16 @@
                   commandQueue:(id<MTLCommandQueue>)commandQueue;
 
 /**
- * Apply a gate to the state vector
- *
- * @param gateData Gate data (JSON dictionary)
- * @param stateVector Target state vector
- * @return Error code
+ * Apply a single gate to the state vector (legacy - creates new command buffer)
  */
 - (MetalQError)applyGate:(NSDictionary *)gateData
            toStateVector:(MetalQStateVector *)stateVector;
+
+/**
+ * Execute all gates in a single command buffer (batched execution)
+ * Much more efficient for circuits with many gates.
+ */
+- (MetalQError)executeGatesBatched:(NSArray *)gates
+                       stateVector:(MetalQStateVector *)stateVector;
 
 @end
