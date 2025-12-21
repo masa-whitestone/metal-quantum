@@ -135,6 +135,52 @@ Get the final statevector without measurements.
 sv = metalq.statevector(qc)  # numpy array
 ```
 
+## Examples
+
+### QFT (Quantum Fourier Transform)
+```python
+from qiskit.circuit.library import QFTGate
+
+qc = QuantumCircuit(3)
+qc.x(0)
+qc.append(QFTGate(3), [0, 1, 2])
+sv = metalq.statevector(qc)
+```
+
+### Multi-Controlled X (MCX)
+```python
+from qiskit.circuit.library import MCXGate
+
+qc = QuantumCircuit(4)
+qc.x([0, 1, 2])  # Set controls
+qc.append(MCXGate(3), [0, 1, 2, 3])
+sv = metalq.statevector(qc)
+```
+
+### Custom Unitary Gate
+```python
+from qiskit.circuit.library import UnitaryGate
+import numpy as np
+
+U = np.array([[np.cos(0.5), -np.sin(0.5)],
+              [np.sin(0.5), np.cos(0.5)]])
+qc = QuantumCircuit(1)
+qc.append(UnitaryGate(U), [0])
+sv = metalq.statevector(qc)
+```
+
+See [`examples/`](examples/) for more comprehensive examples.
+
+## Supported Gates
+
+| Category | Gates |
+|----------|-------|
+| 1Q Basic | `id`, `x`, `y`, `z`, `h`, `s`, `sdg`, `t`, `tdg`, `sx`, `sxdg` |
+| 1Q Rotation | `rx`, `ry`, `rz`, `p`, `u`, `u1`, `u2`, `u3`, `r` |
+| 2Q | `cx`, `cy`, `cz`, `ch`, `cs`, `csdg`, `csx`, `swap`, `iswap`, `cp`, `crx`, `cry`, `crz`, `cu`, `rxx`, `ryy`, `rzz`, `rzx`, `dcx`, `ecr` |
+| 3Q | `ccx`, `ccz`, `cswap` |
+| High-Level | `QFTGate`, `MCXGate`, `UnitaryGate`, `DiagonalGate`, `PermutationGate` |
+
 ## Architecture
 
 ```
