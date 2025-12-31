@@ -57,8 +57,24 @@ class MPSBackend(Backend):
     def __init__(self):
         """Initialize MPS backend."""
         self._lib = self._load_library()
+        self._lib = self._load_library()
+        
+        # Check if building documentation or running on non-macOS
         if not self._lib:
-            raise RuntimeError("Failed to load native MetalQ library")
+            if os.environ.get('METALQ_DOCS_BUILD') == '1' or os.environ.get('READTHEDOCS') == 'True':
+                # Create a mock library for documentation build
+                class MockLib:
+                    def __getattr__(self, name):
+                        return ctypes.CFUNCTYPE(None) 
+                    def metalq_create_context(self): return ctypes.c_void_p(1)
+                    def metalq_is_supported(self): return True
+                    def metalq_destroy_context(self, ctx): pass
+                    def metalq_run(self, *args): return 0
+                    def metalq_gradient_adjoint(self, *args): return 0
+                
+                self._lib = MockLib()
+            else:
+                raise RuntimeError("Failed to load native MetalQ library")
         
         # Define function signatures
         self._lib.metalq_create_context.restype = ctypes.c_void_p

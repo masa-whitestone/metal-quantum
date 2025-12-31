@@ -37,6 +37,8 @@ jobs:
             mkdocs-material-
             
       - name: Install dependencies
+        env:
+          METALQ_DOCS_BUILD: '1'
         run: |
           pip install mkdocs-material mkdocstrings[python]
           pip install . # Install metalq to parse docstrings
