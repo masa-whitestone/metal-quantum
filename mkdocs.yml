@@ -1,0 +1,67 @@
+site_name: Metal-Q
+site_description: High-performance quantum circuit simulator for Apple Silicon.
+site_author: Metal-Q Contributors
+repo_url: https://github.com/masa-whitestone/metal-quantum
+repo_name: masa-whitestone/metal-quantum
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quick Start: quickstart.md
+  - User Guide:
+    - Basics: user_guide/basics.md
+    - PyTorch Integration: user_guide/pytorch.md
+    - Algorithms: user_guide/algorithms.md
+  - API Reference:
+    - Circuit: api/circuit.md
+    - Backends: api/backends.md
+    - Torch Layer: api/torch.md
+    - Visualization: api/visualization.md
+  - Performance: benchmarks.md
+  - Architecture: architecture.md
+  - License: license.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
