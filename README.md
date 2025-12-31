@@ -1,227 +1,203 @@
-# Metal-Q ⚛️🍎
+# Metal-Q
 
-A high-performance quantum circuit simulator for Apple Silicon, using Metal GPU acceleration.
+A high-performance quantum circuit optimization and simulation library for Apple Silicon, leveraging Metal GPU acceleration.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![Qiskit 2.x](https://img.shields.io/badge/Qiskit-2.x-6929C4.svg)](https://qiskit.org/)
+[![Platform macOS](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](https://developer.apple.com/metal/)
 
 ## Overview
 
-Metal-Q is a drop-in replacement for Qiskit's statevector simulator, optimized for Apple Silicon GPUs. It leverages Metal compute shaders to achieve significant speedups on M1/M2/M3/M4 Macs.
+Metal-Q is a comprehensive quantum computing library designed specifically for Apple Silicon (M1/M2/M3/M4) devices. Unlike standard simulators, Metal-Q includes a fully differentiable backend (supporting Adjoint Differentiation on GPU) and seamless integration with PyTorch, making it ideal for Quantum Machine Learning (QML) and Variational Algorithms (VQE/QAOA).
 
 ### Key Features
 
-- 🚀 **Up to 32x faster** than Qiskit for large circuits
-- 🔌 **Drop-in compatible** with Qiskit 2.x circuits
-- 🍎 **Native Apple Silicon** optimization via Metal API
-- 📦 **Simple installation** - no CUDA or complex dependencies
-- ⚛️ **44 quantum gates** supported natively
-
-## Performance
-
-Benchmarked on Apple M3 Pro (16GB RAM):
-
-### Statevector Simulation
-
-| Qubits | Depth | Metal-Q | Qiskit | Speedup |
-|--------|-------|---------|--------|---------|
-| 16 | 10 | 41ms | 42ms | 1.0x |
-| 20 | 10 | 80ms | 1,009ms | **12.7x** |
-| 22 | 10 | 265ms | 4,888ms | **18.5x** |
-| 24 | 8 | 732ms | 17,285ms | **23.6x** |
-| 26 | 6 | 2,303ms | 54,444ms | **23.6x** |
-
-### Sampling (8192 shots)
-
-| Qubits | Metal-Q | Aer | Speedup |
-|--------|---------|-----|---------|
-| 16 | 15ms | 18ms | 1.2x |
-| 20 | 36ms | 138ms | **3.9x** |
-| 22 | 203ms | 497ms | **2.5x** |
-| 24 | 671ms | 1,475ms | **2.2x** |
-
-### QFT Circuit
-
-| Qubits | Metal-Q | Qiskit | Speedup |
-|--------|---------|--------|---------|
-| 16 | 20ms | 24ms | 1.2x |
-| 20 | 63ms | 603ms | **9.6x** |
-| 22 | 137ms | 3,257ms | **23.8x** |
-| 24 | 459ms | 14,788ms | **32.2x** |
+*   **GPU Acceleration**: Up to 50x faster than standard CPU simulators for statevector simulation using Metal Compute Shaders.
+*   **Adjoint Differentiation**: Native GPU implementation of Adjoint Differentiation, enabling gradient calculation with O(1) memory cost relative to circuit depth, crucial for training large variational circuits.
+*   **PyTorch Integration**: Built-in autograd functions allow Metal-Q circuits to act as standard PyTorch layers, enabling hybrid quantum-classical model training.
+*   **Algorithms**: Ready-to-use implementations of VQE (Variational Quantum Eigensolver) and QAOA (Quantum Approximate Optimization Algorithm).
+*   **Qiskit Compatibility**: Includes a bidirectional adapter to convert circuits to/from Qiskit `QuantumCircuit`.
+*   **Native API**: A lightweight, intuitive Python API for circuit construction and execution.
 
 ## Installation
 
 ### Requirements
 
-- macOS 12.0+ (Monterey or later)
-- Apple Silicon (M1/M2/M3/M4) or Intel Mac with Metal support
-- Python 3.9+
-- Xcode Command Line Tools
+*   macOS 12.0+ (Monterey or later)
+*   Apple Silicon (M1/M2/M3/M4) Mac
+*   Python 3.9+
+*   Xcode Command Line Tools
+
+### Install from PyPI
+
+```bash
+pip install metalq
+```
 
 ### Install from Source
 
 ```bash
 git clone https://github.com/masa-whitestone/metal-quantum.git
 cd metal-quantum
-make install
-pip install .
+
+# Compile native Metal library
+cd native && make && cd ..
+
+# Install Python package
+pip install -e .
 ```
 
 ## Quick Start
 
+### 1. Basic Circuit Simulation
+
+Running a simple Bell State circuit using Metal-Q's native API:
+
+```python
+from metalq import Circuit, run
+
+# Create a circuit with 2 qubits
+qc = Circuit(2)
+qc.h(0)
+qc.cx(0, 1)
+
+# Run on MPS (Metal Performance Shaders) backend
+result = run(qc, shots=1000, backend='mps')
+
+print(f"Counts: {result.counts}")
+# Counts: {'00': 502, '11': 498}
+```
+
+### 2. Variational Quantum Eigensolver (VQE) with PyTorch
+
+Metal-Q integrates with PyTorch to optimize variational circuits efficiently.
+
+```python
+import torch
+import torch.optim as optim
+from metalq import Circuit, Parameter, Hamiltonian, Z, X
+from metalq.torch import QuantumLayer
+
+# Define Hamiltonian: H = Z0 * Z1
+H = Z(0) * Z(1)
+
+# Define Ansatz
+circuit = Circuit(2)
+theta = Parameter('theta')
+circuit.rx(theta, 0)
+circuit.cx(0, 1)
+
+# Create PyTorch Layer
+model = QuantumLayer(circuit, H, backend_name='mps')
+optimizer = optim.Adam(model.parameters(), lr=0.1)
+
+# Optimization Loop
+for step in range(100):
+    optimizer.zero_grad()
+    loss = model() # Expectation value
+    loss.backward() # Computes gradients via GPU Adjoint Differentiation
+    optimizer.step()
+    
+    if step % 20 == 0:
+        print(f"Step {step}, Energy: {loss.item():.4f}")
+```
+
+### 3. Qiskit Interoperability
+
+You can create circuits in Qiskit and simulate them on Metal-Q's high-performance backend.
+
 ```python
 from qiskit import QuantumCircuit
-import metalq
+from metalq.adapters.qiskit_adapter import to_metalq, to_qiskit
+from metalq import run
 
-# Create a quantum circuit (standard Qiskit)
-qc = QuantumCircuit(4, 4)
+# Qiskit Circuit
+qc = QuantumCircuit(2)
 qc.h(0)
 qc.cx(0, 1)
-qc.cx(1, 2)
-qc.cx(2, 3)
-qc.measure([0, 1, 2, 3], [0, 1, 2, 3])
 
-# Run on Metal-Q
-result = metalq.run(qc, shots=1024)
-print(result.get_counts())
-# {'0000': 512, '1111': 512}
+# Convert to Metal-Q
+mq_circuit = to_metalq(qc)
+
+# Run on GPU
+result = run(mq_circuit, shots=1000)
+print(result.counts)
+
+# Convert back to Qiskit (if needed)
+qc_back = to_qiskit(mq_circuit)
 ```
 
-### Get Statevector
+## Performance
 
-```python
-qc = QuantumCircuit(3)
-qc.h(0)
-qc.cx(0, 1)
-qc.cx(1, 2)
+Benchmarks on Apple M3 Pro (36GB RAM) demonstrate significant performance improvements over CPU-based simulators. Metal-Q excels particularly with larger qubit counts and deep circuits such as Quantum Fourier Transform (QFT).
 
-# Get statevector directly
-statevector = metalq.statevector(qc)
-print(statevector)
-# [0.707+0j, 0, 0, 0, 0, 0, 0, 0.707+0j]
-```
+### Statevector Simulation (Random Circuit)
 
-## Supported Gates
+| Qubits | Depth | Metal-Q | Qiskit | Speedup |
+|--------|-------|---------|--------|---------|
+| 16     | 10    | 2ms     | 43ms   | **17.9x** |
+| 20     | 10    | 20ms    | 1025ms | **50.2x** |
+| 22     | 10    | 217ms   | 4976ms | **22.9x** |
+| 24     | 8     | 775ms   | 16999ms| **21.9x** |
+| 26     | 6     | 2510ms  | 54967ms| **21.9x** |
 
-### Single-Qubit Gates (19)
-`id`, `x`, `y`, `z`, `h`, `s`, `sdg`, `t`, `tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `u`, `u1`, `u2`, `u3`, `r`
+### Quantum Fourier Transform (QFT)
 
-### Two-Qubit Gates (22)
-`cx`, `cy`, `cz`, `ch`, `cs`, `csdg`, `csx`, `cp`, `crx`, `cry`, `crz`, `cu`, `cu1`, `cu3`, `swap`, `iswap`, `dcx`, `ecr`, `rxx`, `ryy`, `rzz`, `rzx`
+| Qubits | Metal-Q | Qiskit | Speedup |
+|--------|---------|--------|---------|
+| 16     | 1ms     | 24ms   | **18.6x** |
+| 20     | 14ms    | 664ms  | **47.9x** |
+| 22     | 137ms   | 3284ms | **23.9x** |
+| 24     | 643ms   | 14932ms| **23.2x** |
 
-### Three-Qubit Gates (3)
-`ccx` (Toffoli), `cswap` (Fredkin), `ccz`
+### Sampling (Shots=8192)
 
-### High-Level Constructs
-QFTGate, MCXGate, GroverOperator, UnitaryGate (automatically decomposed)
+| Qubits | Metal-Q | Qiskit Aer | Speedup |
+|--------|---------|------------|---------|
+| 16     | 9ms     | 16ms       | **1.9x** |
+| 20     | 34ms    | 143ms      | **4.2x** |
+| 22     | 273ms   | 511ms      | **1.9x** |
+| 24     | 974ms   | 1540ms     | **1.6x** |
 
-## API Reference
+*Benchmarks run on Apple M3 Pro (36GB RAM). Metal-Q uses half-precision complex numbers (MPS limit), while Qiskit uses double precision.*
 
-### `metalq.run(circuit, shots=1024)`
+## Documentation
 
-Execute a quantum circuit with measurements.
-
-```python
-result = metalq.run(qc, shots=1024)
-counts = result.get_counts()  # {'00': 523, '11': 501}
-```
-
-### `metalq.statevector(circuit)`
-
-Get the final statevector without measurements.
-
-```python
-sv = metalq.statevector(qc)  # numpy array
-```
+*   **`metalq.Circuit`**: Core class for circuit construction.
+*   **`metalq.run(circuit, backend='mps')`**: Execute circuits.
+*   **`metalq.expect(circuit, hamiltonian)`**: Calculate expectation values.
+*   **`metalq.statevector(circuit)`**: Get the final statevector.
+*   **`metalq.torch`**: PyTorch integration modules (`QuantumLayer`, `QuantumFunction`).
+*   **`metalq.algorithms`**: VQE and QAOA implementations.
 
 ## Examples
 
-### QFT (Quantum Fourier Transform)
-```python
-from qiskit.circuit.library import QFTGate
+Full example scripts are available in the [`examples/`](examples/) directory:
 
-qc = QuantumCircuit(3)
-qc.x(0)
-qc.append(QFTGate(3), [0, 1, 2])
-sv = metalq.statevector(qc)
-```
-
-### Multi-Controlled X (MCX)
-```python
-from qiskit.circuit.library import MCXGate
-
-qc = QuantumCircuit(4)
-qc.x([0, 1, 2])  # Set controls
-qc.append(MCXGate(3), [0, 1, 2, 3])
-sv = metalq.statevector(qc)
-```
-
-### Custom Unitary Gate
-```python
-from qiskit.circuit.library import UnitaryGate
-import numpy as np
-
-U = np.array([[np.cos(0.5), -np.sin(0.5)],
-              [np.sin(0.5), np.cos(0.5)]])
-qc = QuantumCircuit(1)
-qc.append(UnitaryGate(U), [0])
-sv = metalq.statevector(qc)
-```
-
-See [`examples/`](examples/) for more comprehensive examples.
-
-## Supported Gates
-
-| Category | Gates |
-|----------|-------|
-| 1Q Basic | `id`, `x`, `y`, `z`, `h`, `s`, `sdg`, `t`, `tdg`, `sx`, `sxdg` |
-| 1Q Rotation | `rx`, `ry`, `rz`, `p`, `u`, `u1`, `u2`, `u3`, `r` |
-| 2Q | `cx`, `cy`, `cz`, `ch`, `cs`, `csdg`, `csx`, `swap`, `iswap`, `cp`, `crx`, `cry`, `crz`, `cu`, `rxx`, `ryy`, `rzz`, `rzx`, `dcx`, `ecr` |
-| 3Q | `ccx`, `ccz`, `cswap` |
-| High-Level | `QFTGate`, `MCXGate`, `UnitaryGate`, `DiagonalGate`, `PermutationGate` |
+*   **`vqe_h2.py`**: Variational Quantum Eigensolver for H₂ molecule ground state energy
+*   **`qaoa_maxcut.py`**: QAOA for solving MaxCut graph optimization
+*   **`torch_qnn_classifier.py`**: Quantum Neural Network classifier with PyTorch
+*   **`qiskit_interop.py`**: Qiskit interoperability demonstration
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────┐
-│                  Python Layer                    │
-│              (metalq package)                    │
-├─────────────────────────────────────────────────┤
-│                 ctypes Bridge                    │
-├─────────────────────────────────────────────────┤
-│               Native Layer (ObjC)                │
-│             libmetalq.dylib                      │
-├─────────────────────────────────────────────────┤
-│            Metal Compute Shaders                 │
-│          quantum_gates.metallib                  │
-└─────────────────────────────────────────────────┘
-                        │
-                        ▼
-┌─────────────────────────────────────────────────┐
-│              Apple Silicon GPU                   │
-│         (M1 / M2 / M3 / M4 Series)              │
-└─────────────────────────────────────────────────┘
-```
+Metal-Q is built with a layered architecture to maximize performance while maintaining ease of use:
+
+1.  **Python API**: High-level interface and PyTorch bindings.
+2.  **C Interface**: Lightweight Ctypes bridge.
+3.  **Objective-C Native Layer**: Manages Metal context and buffers.
+4.  **Metal Compute Shaders**: Optimized GPU kernels for gate application, statevector manipulation, and adjoint gradient calculation.
 
 ## Limitations
 
-- **macOS only** - Requires Metal API
-- **No noise models** - Pure statevector simulation
-- **Memory bound** - 28 qubits requires ~2GB GPU memory
-
-## Running Tests
-
-```bash
-make install
-pip install pytest qiskit-aer
-pytest tests/ -v
-```
+*   **Apple Silicon Only**: Requires macOS devices with Metal support.
+*   **Statevector Simulation**: Memory usage grows exponentially (2^N). 30 qubits is the hard limit on most machines (requires ~16GB RAM for statevector).
+*   **Noise Models**: v1.0 supports ideal simulation only.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
-Made with ❤️ for the quantum computing community on Apple Silicon.
+Designed for the quantum future on Apple Silicon.
