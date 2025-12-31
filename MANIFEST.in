@@ -1,10 +1,9 @@
 include README.md
 include LICENSE
-include CONTRIBUTING.md
+include Makefile
 
-# Native libraries (pre-built for distribution)
+# Native libraries
 recursive-include metalq/python/metalq/lib *.dylib *.metallib
 
-# Build files
-include Makefile
+# Source files for building
 recursive-include native *.m *.h *.metal

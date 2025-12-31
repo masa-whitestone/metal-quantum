@@ -24,6 +24,7 @@ except ImportError:
     print("Warning: qiskit-aer not installed")
 
 import metalq
+from metalq.adapters.qiskit_adapter import to_metalq
 
 
 def create_random_circuit(num_qubits: int, depth: int, seed: int = 42) -> QuantumCircuit:
@@ -72,17 +73,19 @@ def benchmark_statevector(qc: QuantumCircuit, num_runs: int = 3) -> Dict[str, fl
     
     # Warm up Metal-Q
     try:
-        _ = metalq.statevector(qc)
+        mq_qc_warm = to_metalq(qc)
+        _ = metalq.statevector(mq_qc_warm)
     except Exception as e:
         print(f"  Metal-Q warm-up failed: {e}")
         return results
     
     # Benchmark Metal-Q
     gc.collect()
+    mq_qc = to_metalq(qc)
     times = []
     for _ in range(num_runs):
         start = time.perf_counter()
-        _ = metalq.statevector(qc)
+        _ = metalq.statevector(mq_qc)
         times.append(time.perf_counter() - start)
     results['metalq'] = np.median(times) * 1000
     
@@ -110,17 +113,19 @@ def benchmark_sampling(qc: QuantumCircuit, shots: int, num_runs: int = 3) -> Dic
     
     # Warm up
     try:
-        _ = metalq.run(qc_meas, shots=shots)
+        mq_meas_warm = to_metalq(qc_meas)
+        _ = metalq.run(mq_meas_warm, shots=shots)
     except Exception as e:
         print(f"  Metal-Q warm-up failed: {e}")
         return results
     
     # Metal-Q
     gc.collect()
+    mq_meas = to_metalq(qc_meas)
     times = []
     for _ in range(num_runs):
         start = time.perf_counter()
-        _ = metalq.run(qc_meas, shots=shots)
+        _ = metalq.run(mq_meas, shots=shots)
         times.append(time.perf_counter() - start)
     results['metalq'] = np.median(times) * 1000
     

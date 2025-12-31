@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "metal-q"
-version = "0.1.0"
+name = "metalq"
+version = "1.0.0"
 description = "High-performance quantum circuit simulator for Apple Silicon using Metal GPU"
 readme = "README.md"
 license = {text = "MIT"}
@@ -23,46 +27,46 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.21.0",
-    "qiskit>=2.0.0,<3.0.0",
+    "qiskit>=2.2.3",
+    "torch>=2.9.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "qiskit-aer>=0.13.0",
 ]
-benchmark = [
-    "qiskit-aer>=0.13.0",
-    "matplotlib>=3.5.0",
+performance = [
+    "numba>=0.56.0",
+    "polars>=0.17.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/masa-whitestone/metal-quantum"
-Documentation = "https://github.com/masa-whitestone/metal-quantum#readme"
 Repository = "https://github.com/masa-whitestone/metal-quantum.git"
 Issues = "https://github.com/masa-whitestone/metal-quantum/issues"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.setuptools]
+packages = ["metalq"]
+include-package-data = true
 
-[tool.hatch.build.targets.wheel]
-packages = ["metalq/python/metalq"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"metalq/python/metalq/lib" = "metalq/lib"
+[tool.setuptools.package-data]
+metalq = ["lib/*.dylib", "lib/*.metallib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+
+[dependency-groups]
+dev = [
+    "build>=1.3.0",
+    "twine>=6.2.0",
+]
