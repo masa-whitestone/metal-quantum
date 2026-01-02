@@ -349,24 +349,17 @@ class TextDrawer:
         
         return "\n".join(grid)
 
-    def _draw_box_in_col(self, buf, qubits, label, width):
+    def _draw_box_in_col(self, buf, qubits, label, width, top_connect=None, bot_connect=None):
         min_q, max_q = min(qubits), max(qubits)
-        
-        # Draw vertical connections if multi-qubit
         center_x = width // 2
+        
+        # Draw vertical connections if multi-qubit (internal to box)
         if min_q != max_q:
-             # Draw vertical line through everything in between
              start_y = min_q * 3 + 1
              end_y   = max_q * 3 + 1
              for y in range(start_y, end_y + 1):
-                 # If we overwrite a wire H_LINE, make it CROSS?
-                 # Inside the box is different.
-                 # Box covers everything.
                  pass
         
-        # For rounded box:
-        # Top boundary at min_q top (row min_q*3)
-        # Bottom boundary at max_q bot (row max_q*3 + 2)
         top_y = min_q * 3
         bot_y = max_q * 3 + 2
         
@@ -377,33 +370,27 @@ class TextDrawer:
         for i in range(len(label)): buf[top_y][label_start + i] = H_LINE
         buf[top_y][label_start + len(label)] = R_TOP_R
         
+        if top_connect:
+            buf[top_y][center_x] = top_connect
+        
         # Bottom Line
         buf[bot_y][center_x - len(label)//2 - 1] = R_BOT_L
         for i in range(len(label)): buf[bot_y][label_start + i] = H_LINE
         buf[bot_y][label_start + len(label)] = R_BOT_R
         
+        if bot_connect:
+            buf[bot_y][center_x] = bot_connect
+        
         # Sides and content
-        # Middle rows
         for y in range(top_y + 1, bot_y):
-            # Left/Right walls
             buf[y][label_start - 1] = V_LINE
             buf[y][label_start + len(label)] = V_LINE
-            
-            # If this is a wire (y % 3 == 1), replace wire with label part or space
-            if y % 3 == 1:
-                q_idx = y // 3
-                # Check if this qubit is part of the gate?
-                # Usually box covers all.
-                # If qubit is in 'qubits', display label on the middle qubit?
-                # Or repeat label on every qubit line?
-                # Standard: Center label in the box vertically.
-                pass
             
             # Clear inside
             for k in range(len(label)):
                 buf[y][label_start + k] = " "
                 
-        # Place label text at vertical center
+        # Place label text
         mid_y = (top_y + bot_y) // 2
         for k, char in enumerate(label):
             buf[mid_y][label_start + k] = char
@@ -414,28 +401,60 @@ class TextDrawer:
         min_q, max_q = min(all_q), max(all_q)
         
         # Vertical Line
-        for q in range(min_q, max_q + 1):
-            y_wire = q * 3 + 1
-            # Top/Bot of this qubit
-            # Draw line through
-            for y in [q*3, q*3+1, q*3+2]:
-                 if min_q*3+1 <= y <= max_q*3+1:
-                     # Crossing wire?
-                     if y == y_wire:
-                         buf[y][center_x] = CROSS
-                     else:
-                         buf[y][center_x] = V_LINE
-                         
-        # Controls
-        for q in ctrls:
-            buf[q*3+1][center_x] = CTRL
+        # We draw the vertical line segment connecting the outermost control/target
+        # excluding the inside of the target box (which is handled by connectors)
+        
+        # Determine connectors needed for target box
+        has_ctrl_above = any(c < tgt for c in ctrls)
+        has_ctrl_below = any(c > tgt for c in ctrls)
+        
+        top_connect = T_UP if has_ctrl_above else None   # ┴
+        bot_connect = T_DOWN if has_ctrl_below else None # ┬
+        
+        # Draw Target Box ('X')
+        self._draw_box_in_col(buf, [tgt], 'X', width, top_connect, bot_connect)
+        
+        # Draw Controls and Vertical Lines
+        # Identify range of vertical line
+        # Line goes from min_q to max_q
+        # But skip target box internals (tgt*3 to tgt*3+2) except connectors?
+        # Connectors are on top_y and bot_y of target box.
+        
+        # Draw vertical line segments
+        for y in range(min_q * 3 + 1, max_q * 3 + 2):
+            # Map y to qubit logical row
+            # If y is within target box range, skip (except connectors handled by box)
+            tgt_top = tgt * 3
+            tgt_bot = tgt * 3 + 2
             
-        # Target
-        # Circle plus? Or just X in text?
-        # Unicode ⊕ U+2295? Or (+)
-        # Let's use (+).
-        buf[tgt*3+1][center_x] = 'X' # Or ⊕ if supported font
-        # Overwrite cross
+            if tgt_top < y < tgt_bot:
+                continue
+            if y == tgt_top and not has_ctrl_above: continue
+            if y == tgt_bot and not has_ctrl_below: continue
+            
+            # If y is exactly a wire line (q*3+1)
+            is_wire = (y % 3 == 1)
+            q = y // 3
+            
+            if is_wire:
+                if q in ctrls:
+                    buf[y][center_x] = CTRL
+                elif q == tgt:
+                    pass # Handled by box
+                else:
+                    # Crossing wire
+                    buf[y][center_x] = CROSS
+            else:
+                # Spacer line or top/bot line of box
+                # If it's a connector spot, verify?
+                # Connectors are handled by _draw_box_in_col, so we just need to draw lines leading to them.
+                # If y == tgt_top, box drew '┴'. We need line above it? 
+                # No, buf[y][center_x] is the char at that row.
+                # If we overwrite it with V_LINE, we lose connector.
+                if y == tgt_top or y == tgt_bot:
+                    continue 
+                    
+                buf[y][center_x] = V_LINE
         
     def _draw_cz_in_col(self, buf, qubits, width):
         center_x = width // 2
