@@ -43,7 +43,6 @@ plugins:
 nav:
   - Home: index.md
   - Installation: installation.md
-  - Quick Start: quickstart.md
   - User Guide:
     - Basics: user_guide/basics.md
     - PyTorch Integration: user_guide/pytorch.md
