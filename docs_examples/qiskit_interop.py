@@ -14,7 +14,7 @@ print("Qiskit Circuit created.")
 # 2. Convert to Metal-Q
 print("\nConverting to Metal-Q...")
 qc_metalq = to_metalq(qc_qiskit)
-print(f"Metal-Q Circuit: {qc_metalq}")
+print(f"Metal-Q Circuit:\n{qc_metalq}")
 
 # 3. Run on Metal-Q
 print("\nRunning on Metal-Q MPS backend...")
