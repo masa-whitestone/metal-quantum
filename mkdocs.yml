@@ -48,9 +48,11 @@ nav:
     - PyTorch Integration: user_guide/pytorch.md
     - Algorithms: user_guide/algorithms.md
   - API Reference:
-    - Circuit: api/circuit.md
+    - Overview: api/index.md
+    - Circuit & Gates: api/circuit.md
     - Backends: api/backends.md
-    - Torch Layer: api/torch.md
+    - Algorithms: api/algorithms.md
+    - Torch Integration: api/torch.md
     - Visualization: api/visualization.md
   - Performance: benchmarks.md
   - Architecture: architecture.md
