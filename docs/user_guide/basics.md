@@ -26,8 +26,11 @@ print(qc)
 ```text
 === Basic Circuit Simulation ===
 Circuit created:
-q_0: ─┤ H ├──●──
-q_1: ────────+──
+     ╭─╮   
+q_0: │H│─●─
+     ╰─╯ │ 
+         │ 
+q_1: ────X─
 ```
 
 ## Running Simulation
@@ -113,8 +116,12 @@ print(qc_back)
 Qiskit Circuit created.
 
 Converting to Metal-Q...
-Metal-Q Circuit: q_0: ─┤ H ├──●──
-q_1: ────────+──┤ RZ(0.50) ├─
+Metal-Q Circuit:      ╭─╮              
+q_0: │H│─●────────────
+     ╰─╯ │            
+         │ ╭────────╮ 
+q_1: ────X─│RZ(0.50)│─
+           ╰────────╯ 
 
 Running on Metal-Q MPS backend...
 Counts: {'00': 54, '11': 46}
