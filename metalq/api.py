@@ -28,10 +28,14 @@ def get_backend(name: str = 'mps'):
             raise ValueError(f"Unknown backend '{name}'. Available: 'mps', 'cpu'.")
     return _BACKENDS[name]
 
+from .result import Result
+
+# ...
+
 def run(circuit: Circuit, 
         shots: int = 1024, 
         backend: str = 'mps', 
-        params: Optional[Union[Dict, List[float]]] = None) -> Union[Dict, Any]:
+        params: Optional[Union[Dict, List[float]]] = None) -> Result:
     """
     Execute a circuit and return results (counts or statevector).
     
@@ -42,10 +46,16 @@ def run(circuit: Circuit,
         params: Parameters to bind to the circuit.
     
     Returns:
-        Result dictionary containing 'counts' or 'statevector'.
+        Result object containing 'counts' or 'statevector'.
     """
     bk = get_backend(backend)
-    return bk.run(circuit, shots=shots, params=params)
+    res_dict = bk.run(circuit, shots=shots, params=params)
+    
+    return Result(
+        counts=res_dict.get('counts'),
+        statevector=res_dict.get('statevector'),
+        metadata={'backend': backend, 'time_ms': res_dict.get('time_ms')}
+    )
 
 def expect(circuit: Circuit, 
            hamiltonian: Hamiltonian, 
