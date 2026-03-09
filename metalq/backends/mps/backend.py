@@ -1,20 +1,36 @@
 """
 metalq/backends/mps/backend.py - Metal Performance Shaders (MPS) Backend
 
-Python side wrapper for the native Metal backend.
+Python side wrapper for the native Metal backend with enhanced error handling.
 """
 from typing import Dict, List, Optional, Union, TYPE_CHECKING
 import numpy as np
 import time
 import os
 import ctypes
+import math
+import threading
+import hashlib
+import logging
 from dataclasses import dataclass
 
 from ..base import Backend
+from ...exceptions import (
+    ValidationError,
+    InvalidParameterError,
+    NativeCallError,
+    NativeTimeoutError,
+    LibraryLoadError,
+    handle_native_result,
+    validate_parameters
+)
 
 if TYPE_CHECKING:
     from ...circuit import Circuit
     from ...spin import Hamiltonian
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -52,29 +68,41 @@ GATE_MAP = {
 class MPSBackend(Backend):
     """
     GPU-accelerated backend using Apple Metal Performance Shaders.
+    Enhanced with comprehensive error handling and security features.
     """
-    
-    def __init__(self):
-        """Initialize MPS backend."""
+
+    # Default timeout for operations (seconds)
+    DEFAULT_TIMEOUT = 30.0
+
+    def __init__(self, timeout_scale: Optional[float] = None):
+        """
+        Initialize MPS backend with enhanced error handling.
+
+        Args:
+            timeout_scale: Optional scale factor for operation timeouts (default 1.0)
+        """
+        if timeout_scale is None:
+            timeout_scale = 1.0
+        self.timeout_scale = timeout_scale
+        self._lock = threading.Lock()
         self._lib = self._load_library()
-        self._lib = self._load_library()
-        
+
         # Check if building documentation or running on non-macOS
         if not self._lib:
             if os.environ.get('METALQ_DOCS_BUILD') == '1' or os.environ.get('READTHEDOCS') == 'True':
                 # Create a mock library for documentation build
                 class MockLib:
                     def __getattr__(self, name):
-                        return ctypes.CFUNCTYPE(None) 
+                        return ctypes.CFUNCTYPE(None)
                     def metalq_create_context(self): return ctypes.c_void_p(1)
                     def metalq_is_supported(self): return True
                     def metalq_destroy_context(self, ctx): pass
                     def metalq_run(self, *args): return 0
                     def metalq_gradient_adjoint(self, *args): return 0
-                
+
                 self._lib = MockLib()
             else:
-                raise RuntimeError("Failed to load native MetalQ library")
+                raise LibraryLoadError("Failed to load native MetalQ library. Please ensure you're running on Apple Silicon with Metal support.")
         
         # Define function signatures
         self._lib.metalq_create_context.restype = ctypes.c_void_p
@@ -100,10 +128,14 @@ class MPSBackend(Backend):
             ctypes.POINTER(ctypes.c_double)
         ]
         
-        # Initialize native context
-        self._ctx = self._lib.metalq_create_context()
-        if not self._ctx:
-            raise RuntimeError("Failed to create MetalQ context")
+        # Initialize native context with timeout
+        try:
+            self._ctx = self._call_with_timeout('metalq_create_context', timeout=5.0)
+            if not self._ctx:
+                raise NativeCallError("metalq_create_context", -1, "Failed to create MetalQ context")
+        except Exception as e:
+            logger.error(f"Failed to initialize Metal context: {e}")
+            raise
     
     def __del__(self):
         """Cleanup native resources."""
@@ -111,32 +143,146 @@ class MPSBackend(Backend):
             self._lib.metalq_destroy_context(self._ctx)
     
     def _load_library(self):
-        """Load the native shared library."""
+        """Load the native shared library with security validation."""
         lib_name = "libmetalq.dylib"
-        # Search paths
+        # Secure search paths (avoid system directories that could be compromised)
         paths = [
             os.path.abspath(f"native/build/{lib_name}"),
             os.path.join(os.path.dirname(__file__), "../../../native/build", lib_name),
-            os.path.join(os.path.dirname(__file__), "../../../../native/build", lib_name), # In case of deeper nesting
-            f"/usr/local/lib/{lib_name}"
+            os.path.join(os.path.dirname(__file__), "../../../../native/build", lib_name),
+            # Avoid /usr/local/lib for security - can be world-writable
+            os.path.expanduser(f"~/.metalq/lib/{lib_name}"),
         ]
-        
+
         for path in paths:
             if os.path.exists(path):
-                try:
-                    return ctypes.CDLL(path)
-                except OSError:
-                    continue
-        
-        # Fallback for installed package (if bundled)
-        # ...
-        
+                # Validate library before loading
+                if self._validate_library(path):
+                    try:
+                        logger.info(f"Loading library from {path}")
+                        lib = ctypes.CDLL(path)
+                        # Verify library has expected functions
+                        self._verify_library_interface(lib)
+                        return lib
+                    except OSError as e:
+                        logger.warning(f"Failed to load library from {path}: {e}")
+                        continue
+
         return None
+
+    def _validate_library(self, filepath: str) -> bool:
+        """Validate library file for security."""
+        try:
+            # Check file permissions - should not be world-writable
+            stat_info = os.stat(filepath)
+            if stat_info.st_mode & 0o002:  # World-writable
+                logger.warning(f"Library {filepath} is world-writable, refusing to load")
+                return False
+
+            # Log validation success
+            logger.debug(f"Library validation passed for {filepath}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to validate library {filepath}: {e}")
+            return False
+
+    def _verify_library_interface(self, lib):
+        """Verify that loaded library has expected functions."""
+        required_functions = [
+            'metalq_create_context',
+            'metalq_destroy_context',
+            'metalq_run',
+            'metalq_gradient_adjoint',
+            'metalq_is_supported'
+        ]
+
+        for func_name in required_functions:
+            if not hasattr(lib, func_name):
+                raise LibraryLoadError(f"Library missing required function: {func_name}")
+
+    def _call_with_timeout(self, func_name: str, *args, timeout: Optional[float] = None, **kwargs):
+        """Call native function with timeout and error handling."""
+        if timeout is None:
+            timeout = self.DEFAULT_TIMEOUT * self.timeout_scale
+
+        if not hasattr(self._lib, func_name):
+            raise NativeCallError(func_name, -1, f"Function {func_name} not found")
+
+        func = getattr(self._lib, func_name)
+
+        # Execute with timeout using threading
+        result = [None]
+        exception = [None]
+
+        def execute():
+            try:
+                result[0] = func(*args, **kwargs)
+            except Exception as e:
+                exception[0] = e
+
+        thread = threading.Thread(target=execute, daemon=True)
+        thread.start()
+        thread.join(timeout)
+
+        if thread.is_alive():
+            logger.error(f"Native function {func_name} timed out after {timeout}s")
+            raise NativeTimeoutError(func_name, timeout)
+
+        if exception[0]:
+            logger.error(f"Native function {func_name} raised exception: {exception[0]}")
+            raise exception[0]
+
+        # Check return code if applicable
+        if isinstance(result[0], int) and func_name not in ['metalq_is_supported', 'metalq_create_context']:
+            handle_native_result(result[0], func_name)
+
+        return result[0]
+
+    def _validate_circuit(self, circuit: 'Circuit'):
+        """Validate circuit before execution."""
+        if circuit.num_qubits <= 0:
+            raise ValidationError("Circuit must have at least 1 qubit")
+        if circuit.num_qubits > self.max_qubits:
+            raise ValidationError(f"Circuit has {circuit.num_qubits} qubits, maximum is {self.max_qubits}")
+
+        if len(circuit.gates) > 100000:  # Reasonable limit
+            raise ValidationError("Circuit has too many gates")
+
+        # Validate each gate
+        for i, gate in enumerate(circuit.gates):
+            if not gate.name:
+                raise ValidationError(f"Gate {i} has no name")
+
+            # Check qubit indices
+            for qubit in gate.qubits:
+                if qubit < 0 or qubit >= circuit.num_qubits:
+                    raise ValidationError(f"Gate {i} ({gate.name}) has invalid qubit index {qubit}")
+
+            # Validate parameters
+            for j, param in enumerate(gate.params):
+                if isinstance(param, (int, float)):
+                    if math.isnan(param):
+                        raise ValidationError(f"Gate {i} ({gate.name}) parameter {j} is NaN")
+                    if math.isinf(param):
+                        raise ValidationError(f"Gate {i} ({gate.name}) parameter {j} is infinite")
+                    if abs(param) > 1000:
+                        raise ValidationError(f"Gate {i} ({gate.name}) parameter {j} value {param} exceeds reasonable bounds")
+
+    def _calculate_timeout(self, num_qubits: int, num_gates: int) -> float:
+        """Calculate appropriate timeout based on circuit complexity."""
+        base = 10.0
+        complexity_factor = (2 ** (num_qubits / 10)) * (num_gates / 100)
+        timeout = base + complexity_factor * self.timeout_scale
+        max_timeout = 300.0 * self.timeout_scale  # 5 minutes max
+        return min(timeout, max_timeout)
 
     def is_available(self) -> bool:
         """Check if Metal is supported on this device."""
         if not self._lib: return False
-        return bool(self._lib.metalq_is_supported())
+        try:
+            return bool(self._call_with_timeout('metalq_is_supported', timeout=2.0))
+        except Exception:
+            return False
     
     @property
     def name(self) -> str:
@@ -146,16 +292,29 @@ class MPSBackend(Backend):
     def max_qubits(self) -> int:
         return 30
     
-    def run(self, 
-            circuit: 'Circuit', 
+    def run(self,
+            circuit: 'Circuit',
             shots: int = 0,
             params: Optional[Union[Dict, List[float]]] = None) -> Dict:
-        """Execute circuit on GPU."""
-        
+        """Execute circuit on GPU with enhanced error handling."""
+        start_time = time.perf_counter()
+
+        # Validate inputs
+        if shots < 0:
+            raise ValidationError("Shots must be non-negative")
+        if shots > 1000000:  # Reasonable limit
+            raise ValidationError("Shots exceeds maximum (1000000)")
+
         # Bind parameters
         if params is not None:
-            circuit = circuit.bind_parameters(params)
-        
+            try:
+                circuit = circuit.bind_parameters(params)
+            except Exception as e:
+                raise InvalidParameterError(f"Failed to bind parameters: {e}")
+
+        # Validate circuit
+        self._validate_circuit(circuit)
+
         num_qubits = circuit.num_qubits
         
         # Convert gates to C structure
@@ -206,44 +365,60 @@ class MPSBackend(Backend):
         # Allocate output buffers
         # Statevector: 2^n * 8 bytes (float complex)
         sv_size = 1 << num_qubits
-        statevector = np.zeros(sv_size, dtype=np.complex64)
-        
+
+        # Check memory requirements
+        memory_required = sv_size * 8  # complex64 = 8 bytes
+        if memory_required > 16 * 1024**3:  # 16GB limit
+            raise ValidationError(
+                f"Circuit requires {memory_required / 1024**3:.1f}GB, exceeding memory limit"
+            )
+
+        try:
+            statevector = np.zeros(sv_size, dtype=np.complex64)
+        except MemoryError:
+            raise ValidationError(f"Failed to allocate memory for {num_qubits} qubits")
+
         # We need to pass pointer to numpy data
         sv_ptr = statevector.ctypes.data_as(ctypes.POINTER(MQComplex))
+
+        # Calculate appropriate timeout
+        num_gates = len(circuit.gates)
+        timeout = self._calculate_timeout(num_qubits, num_gates)
+
+        logger.info(f"Executing circuit: {num_qubits} qubits, {num_gates} gates, timeout={timeout}s")
+
+        # Execute circuit with timeout and error handling
+        try:
+            res_code = self._call_with_timeout(
+                'metalq_run',
+                self._ctx,
+                ctypes.c_uint32(num_qubits),
+                c_gates,
+                ctypes.c_uint32(len(circuit.gates)),
+                ctypes.c_uint32(0),  # shots=0 for now in native to just get SV
+                sv_ptr,
+                None,  # counts out
+                timeout=timeout
+            )
+        except Exception as e:
+            logger.error(f"Circuit execution failed: {e}")
+            raise
         
-        # Measurement counts (if shots > 0)
-        # Native API signature:
-        # int metalq_run(ctx, nq, gates, ng, shots, sv_out, counts_out)
-        
-        # Counts logic in native is not fully implemented in verify/plan, 
-        # but let's assume we get statevector back and sample in Python for MVP if shots>0
-        # for maximum reliability in Phase 2/3 transition.
-        # Or pass explicit None.
-        
-        # print(f"DEBUG: Calling metalq_run with {num_qubits} qubits, {len(circuit.gates)} gates")
-        res_code = self._lib.metalq_run(
-            self._ctx,
-            ctypes.c_uint32(num_qubits),
-            c_gates,
-            ctypes.c_uint32(len(circuit.gates)),
-            ctypes.c_uint32(0), # shots=0 for now in native to just get SV
-            sv_ptr,
-            None # counts out
-        )
-        # print(f"DEBUG: metalq_run returned {res_code}")
-        
-        if res_code != 0:
-            raise RuntimeError(f"Metal execution failed with code {res_code}")
-        
-        result = {}
-        result['statevector'] = statevector
-        
+        result = {
+            'statevector': statevector,
+            'time_ms': (time.perf_counter() - start_time) * 1000
+        }
+
         # If shots requested, sample from statevector on CPU for now (hybrid)
         # Implementing full GPU sampling is an optimization.
         if shots > 0:
-            from ..cpu.measurement import sample_counts
-            result['counts'] = sample_counts(statevector, shots, num_qubits)
-            
+            try:
+                from ..cpu.measurement import sample_counts
+                result['counts'] = sample_counts(statevector, shots, num_qubits)
+            except Exception as e:
+                logger.error(f"Sampling failed: {e}")
+                raise NativeCallError('sampling', -1, f"Failed to sample: {e}")
+
         return result
 
     def statevector(self, circuit: 'Circuit', params=None) -> np.ndarray:
@@ -320,17 +495,26 @@ class MPSBackend(Backend):
         # Allocate flat gradient buffer for all parameters
         grads_out = (ctypes.c_double * total_param_count)()
         
-        res = self._lib.metalq_gradient_adjoint(
-            self._ctx,
-            ctypes.c_uint32(num_qubits),
-            c_gates,
-            ctypes.c_uint32(len(circuit.gates)),
-            ctypes.byref(h_struct),
-            grads_out
-        )
-        
-        if res != 0:
-            raise RuntimeError(f"Native adjoint gradient failed with code {res}")
+        # Calculate timeout for gradient computation
+        timeout = self._calculate_timeout(num_qubits, len(circuit.gates)) * 2  # Gradient is more expensive
+
+        logger.info(f"Computing gradient with timeout={timeout}s")
+
+        # Compute gradient with timeout
+        try:
+            res = self._call_with_timeout(
+                'metalq_gradient_adjoint',
+                self._ctx,
+                ctypes.c_uint32(num_qubits),
+                c_gates,
+                ctypes.c_uint32(len(circuit.gates)),
+                ctypes.byref(h_struct),
+                grads_out,
+                timeout=timeout
+            )
+        except Exception as e:
+            logger.error(f"Gradient computation failed: {e}")
+            raise
             
         # 4. Filter/Map Gradients
         # Map flat gradients back to input parameter structure.
