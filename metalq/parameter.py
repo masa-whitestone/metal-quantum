@@ -8,14 +8,15 @@ Example:
     theta = Parameter('θ')
     qc = Circuit(1)
     qc.ry(theta, 0)
-    
+
     # 値をバインドして実行
     result = mq.run(qc, params={theta: 0.5})
 """
 from __future__ import annotations
-from typing import Optional, Union, Set
+from typing import Optional, Union, Set, Dict
 import uuid
 import math
+from .secure_eval import SecureEvaluator, safe_eval, ExpressionBuilder, SecurityError, ExpressionError
 
 
 class Parameter:
@@ -99,22 +100,62 @@ class Parameter:
 class ParameterExpression:
     """
     Expression involving parameters (e.g., theta + 0.5, 2 * phi).
-    
+
     パラメータを含む式。評価時に具体的な値に変換される。
+    Uses secure AST-based evaluation to prevent code injection.
     """
-    
-    __slots__ = ('_left', '_right', '_op', '_parameters')
-    
+
+    __slots__ = ('_left', '_right', '_op', '_parameters', '_expression_str')
+
     def __init__(self, left, right, op: str):
         self._left = left
         self._right = right
         self._op = op
-        
+
+        # Build expression string for secure evaluation
+        self._expression_str = self._build_expression_string()
+
         # 含まれるパラメータを収集
         self._parameters = set()
         self._collect_parameters(left)
         self._collect_parameters(right)
-    
+
+        # Validate expression is safe
+        self._validate_expression()
+
+    def _build_expression_string(self) -> str:
+        """Build expression string for secure evaluation."""
+        left_str = self._to_string(self._left)
+        right_str = self._to_string(self._right)
+
+        # Ensure parentheses for proper precedence
+        if self._op in ['*', '/'] and isinstance(self._left, ParameterExpression):
+            left_str = f"({left_str})"
+        if self._op in ['*', '/'] and isinstance(self._right, ParameterExpression):
+            right_str = f"({right_str})"
+
+        return f"{left_str} {self._op} {right_str}"
+
+    def _to_string(self, obj) -> str:
+        """Convert object to string for expression."""
+        if isinstance(obj, Parameter):
+            return obj.name
+        elif isinstance(obj, ParameterExpression):
+            return obj._expression_str
+        else:
+            return str(float(obj))
+
+    def _validate_expression(self):
+        """Validate expression is safe to evaluate."""
+        try:
+            # Create test evaluator to validate expression
+            evaluator = SecureEvaluator()
+            import ast
+            tree = ast.parse(self._expression_str, mode='eval')
+            evaluator._validate_ast(tree)
+        except Exception as e:
+            raise ValueError(f"Invalid parameter expression: {e}")
+
     def _collect_parameters(self, obj):
         """再帰的にパラメータを収集"""
         if isinstance(obj, Parameter):
@@ -130,26 +171,36 @@ class ParameterExpression:
     def evaluate(self, param_values: dict) -> float:
         """
         Evaluate expression with concrete parameter values.
-        
+
+        Uses secure AST-based evaluation to prevent code injection.
+
         Args:
             param_values: Dict mapping Parameter to float
-            
+
         Returns:
             Evaluated float value
+
+        Raises:
+            ExpressionError: If expression cannot be evaluated
+            SecurityError: If expression contains unsafe operations
         """
-        left_val = self._eval_operand(self._left, param_values)
-        right_val = self._eval_operand(self._right, param_values)
-        
-        if self._op == '+':
-            return left_val + right_val
-        elif self._op == '-':
-            return left_val - right_val
-        elif self._op == '*':
-            return left_val * right_val
-        elif self._op == '/':
-            return left_val / right_val
-        else:
-            raise ValueError(f"Unknown operator: {self._op}")
+        # Convert Parameter objects to name->value mapping
+        variables = {}
+        for param, value in param_values.items():
+            if isinstance(param, Parameter):
+                variables[param.name] = float(value)
+            else:
+                # Handle string keys as well
+                variables[str(param)] = float(value)
+
+        # Use secure evaluator
+        try:
+            result = safe_eval(self._expression_str, variables)
+            return float(result)
+        except (SecurityError, ExpressionError) as e:
+            raise ValueError(f"Failed to evaluate expression: {e}")
+        except Exception as e:
+            raise ValueError(f"Expression evaluation error: {e}")
     
     def _eval_operand(self, operand, param_values: dict) -> float:
         """Evaluate a single operand."""
@@ -252,12 +303,11 @@ class ParameterExpression:
             return None
         return None
 
-    
     def __repr__(self) -> str:
-        return f"({self._left} {self._op} {self._right})"
-    
+        return f"ParameterExpression({self._expression_str})"
+
     def __str__(self) -> str:
-        return self.__repr__()
+        return self._expression_str
     
     # 式の連鎖をサポート
     def __add__(self, other) -> 'ParameterExpression':
@@ -298,11 +348,26 @@ def get_parameters(value) -> Set[Parameter]:
 
 
 def evaluate_parameter(value, param_values: dict) -> float:
-    """Evaluate a potentially parameterized value."""
+    """
+    Evaluate a potentially parameterized value.
+
+    Uses secure evaluation to prevent code injection.
+
+    Args:
+        value: Value to evaluate (Parameter, ParameterExpression, or numeric)
+        param_values: Dictionary mapping parameters to values
+
+    Returns:
+        Evaluated float value
+
+    Raises:
+        ValueError: If parameter not bound or evaluation fails
+        SecurityError: If expression contains unsafe operations
+    """
     if isinstance(value, Parameter):
         if value not in param_values:
             raise ValueError(f"Parameter {value.name} not bound")
-        return param_values[value]
+        return float(param_values[value])
     elif isinstance(value, ParameterExpression):
         return value.evaluate(param_values)
     else:
