@@ -96,7 +96,7 @@ jobs:
       options: >-
         --user 1001:1001
         --read-only
-        --tmpfs /tmp:rw,nosuid,size=1024M
+        --tmpfs /tmp:rw,exec,nosuid,size=1024M
         --tmpfs /home:rw,noexec,nosuid,size=256M
 
     steps:
