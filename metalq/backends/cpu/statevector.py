@@ -6,6 +6,30 @@ NumPy を使用した状態ベクトル操作。Numba がない場合のフォ�
 import numpy as np
 from typing import List, Dict, Any, Union, Optional
 
+def expectation_from_statevector(sv: np.ndarray, hamiltonian,
+                                 num_qubits: int) -> float:
+    """
+    Matrix-free <psi|H|psi>: apply each Pauli string via axis operations
+    instead of materializing the dense 2^n x 2^n Hamiltonian matrix.
+
+    Little-endian convention: qubit q is bit q of the statevector index.
+    """
+    total = 0.0
+    for term in hamiltonian.terms:
+        psi = sv
+        for p_str, q_idx in term.ops:
+            psi = psi.reshape(-1, 2, 1 << q_idx)
+            if p_str == 'X':
+                psi = psi[:, ::-1, :]
+            elif p_str == 'Y':
+                psi = np.stack([-1j * psi[:, 1, :], 1j * psi[:, 0, :]], axis=1)
+            elif p_str == 'Z':
+                psi = np.concatenate([psi[:, :1, :], -psi[:, 1:, :]], axis=1)
+            psi = psi.reshape(-1)
+        total += term.coeff.real * float(np.real(np.vdot(sv, psi)))
+    return total
+
+
 def initialize_statevector(num_qubits: int) -> np.ndarray:
     """
     Initialize statevector to |0...0⟩.
@@ -74,19 +98,23 @@ def apply_gate(sv: np.ndarray, gate: Any, num_qubits: int) -> np.ndarray:
     # Gate indices
     # Output indices for the target qubits will be new characters
     # Input indices for the target qubits will be the existing characters from sv
-    target_indices = [all_indices[q] for q in qubits]
+    # Little-endian: qubit q is the q-th bit of the statevector index, i.e.
+    # axis (num_qubits - 1 - q) of the reshaped array. This matches the
+    # optimized numba/native kernels (stride 1 << q).
+    target_axes = [num_qubits - 1 - q for q in qubits]
+    target_indices = [all_indices[ax] for ax in target_axes]
     new_indices = [chr(97 + num_qubits + i) for i in range(len(qubits))] # New chars
-    
+
     # Gate matrix indices: [out_0, ..., out_{k-1}, in_0, ..., in_{k-1}]
     gate_indices_str = "".join(new_indices) + "".join(target_indices)
-    
+
     # Input statevector indices
     input_str = "".join(all_indices)
-    
+
     # Output statevector indices: replace target indices with new indices
     output_indices = list(all_indices)
-    for i, q in enumerate(qubits):
-        output_indices[q] = new_indices[i]
+    for i, ax in enumerate(target_axes):
+        output_indices[ax] = new_indices[i]
     output_str = "".join(output_indices)
     
     # Einsum equation

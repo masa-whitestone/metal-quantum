@@ -131,7 +131,7 @@ class ParameterExpression:
         # Ensure parentheses for proper precedence
         if self._op in ['*', '/'] and isinstance(self._left, ParameterExpression):
             left_str = f"({left_str})"
-        if self._op in ['*', '/'] and isinstance(self._right, ParameterExpression):
+        if self._op in ['*', '/', '-'] and isinstance(self._right, ParameterExpression):
             right_str = f"({right_str})"
 
         return f"{left_str} {self._op} {right_str}"
@@ -172,7 +172,10 @@ class ParameterExpression:
         """
         Evaluate expression with concrete parameter values.
 
-        Uses secure AST-based evaluation to prevent code injection.
+        Expressions are evaluated from the validated expression tree built
+        from Parameter objects and numeric literals. This preserves parameter
+        identity even when multiple Parameter instances share the same
+        human-readable name.
 
         Args:
             param_values: Dict mapping Parameter to float
@@ -184,30 +187,39 @@ class ParameterExpression:
             ExpressionError: If expression cannot be evaluated
             SecurityError: If expression contains unsafe operations
         """
-        # Convert Parameter objects to name->value mapping
-        variables = {}
-        for param, value in param_values.items():
-            if isinstance(param, Parameter):
-                variables[param.name] = float(value)
-            else:
-                # Handle string keys as well
-                variables[str(param)] = float(value)
-
-        # Use secure evaluator
         try:
-            result = safe_eval(self._expression_str, variables)
-            return float(result)
-        except (SecurityError, ExpressionError) as e:
-            raise ValueError(f"Failed to evaluate expression: {e}")
+            return float(self._evaluate_expression(param_values))
         except Exception as e:
             raise ValueError(f"Expression evaluation error: {e}")
-    
+
+    def _evaluate_expression(self, param_values: dict) -> float:
+        """Evaluate this expression recursively while preserving identity."""
+        left = self._eval_operand(self._left, param_values)
+        right = self._eval_operand(self._right, param_values)
+
+        if self._op == '+':
+            return left + right
+        if self._op == '-':
+            return left - right
+        if self._op == '*':
+            return left * right
+        if self._op == '/':
+            return left / right
+
+        raise ValueError(f"Unsupported operator: {self._op}")
+
     def _eval_operand(self, operand, param_values: dict) -> float:
         """Evaluate a single operand."""
         if isinstance(operand, Parameter):
-            if operand not in param_values:
-                raise ValueError(f"Parameter {operand.name} not bound")
-            return param_values[operand]
+            if operand in param_values:
+                return float(param_values[operand])
+
+            # Preserve support for string-key bindings when identity is not
+            # available, while still preferring exact Parameter matches.
+            if operand.name in param_values:
+                return float(param_values[operand.name])
+
+            raise ValueError(f"Parameter {operand.name} not bound")
         elif isinstance(operand, ParameterExpression):
             return operand.evaluate(param_values)
         else:

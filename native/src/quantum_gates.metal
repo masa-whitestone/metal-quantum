@@ -133,3 +133,65 @@ kernel void apply_gate_two(
     state[indices[2]] = res[2];
     state[indices[3]] = res[3];
 }
+
+// ===========================================================================
+// Three Qubit Gates
+// ===========================================================================
+
+struct GateMatrix8x8 {
+    Complex val[64];
+};
+
+// Row index convention matches the 2-qubit kernel: qubits[0] is the MSB of
+// the 3-bit row index, qubits[2] the LSB (row r = q0*4 + q1*2 + q2).
+kernel void apply_gate_three(
+    device Complex* state [[buffer(0)]],
+    constant uint& bit_a [[buffer(1)]],
+    constant uint& bit_b [[buffer(2)]],
+    constant uint& bit_c [[buffer(3)]],
+    constant GateMatrix8x8& gate [[buffer(4)]],
+    uint id [[thread_position_in_grid]]
+) {
+    uint p1 = min(bit_a, min(bit_b, bit_c));
+    uint p3 = max(bit_a, max(bit_b, bit_c));
+    uint p2 = bit_a + bit_b + bit_c - p1 - p3;
+
+    uint s1 = 1 << p1;
+    uint s2 = 1 << p2;
+    uint s3 = 1 << p3;
+
+    uint base = id;
+    base = (base / s1) * (s1 << 1) + (base % s1);
+    base = (base / s2) * (s2 << 1) + (base % s2);
+    base = (base / s3) * (s3 << 1) + (base % s3);
+
+    uint ba = 1 << bit_a;
+    uint bb = 1 << bit_b;
+    uint bc = 1 << bit_c;
+
+    uint indices[8];
+    for (uint r = 0; r < 8; r++) {
+        indices[r] = base
+                   + ((r & 4) ? ba : 0)
+                   + ((r & 2) ? bb : 0)
+                   + ((r & 1) ? bc : 0);
+    }
+
+    Complex v[8];
+    for (int k = 0; k < 8; k++) {
+        v[k] = state[indices[k]];
+    }
+
+    Complex res[8];
+    for (int r = 0; r < 8; r++) {
+        res[r] = {0, 0};
+        for (int c = 0; c < 8; c++) {
+            Complex g_val = gate.val[r * 8 + c];
+            res[r] = c_add(res[r], c_mul(g_val, v[c]));
+        }
+    }
+
+    for (int k = 0; k < 8; k++) {
+        state[indices[k]] = res[k];
+    }
+}

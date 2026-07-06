@@ -77,6 +77,13 @@ typedef enum {
   MQ_GATE_SWAP,
   MQ_GATE_CP,
   MQ_GATE_U1,
+  MQ_GATE_CCX,
+  MQ_GATE_CSWAP,
+  MQ_GATE_CCZ,
+  // Newly added gates MUST be appended at the END: existing numeric values are
+  // mirrored in GATE_MAP (metalq/backends/mps/backend.py) and must not change.
+  MQ_GATE_U3, // = 19: U(theta, phi, lam) universal single-qubit gate
+  MQ_GATE_CH, // = 20: controlled-Hadamard
   // ... add more as needed
 } mq_gate_type_t;
 
@@ -96,8 +103,8 @@ typedef struct {
  * @param gates Array of gates
  * @param num_gates Number of gates
  * @param shots Number of measurement shots (0 = statevector only)
- * @param out_statevector Buffer for output statevector (optional, size 2^n * 16
- * bytes)
+ * @param out_statevector Buffer for output statevector (optional, size 2^n * 8
+ * bytes (float complex, mq_complex_t))
  * @param out_counts Buffer for measurement counts (optional)
  *
  * Returns 0 on success, non-zero on error.
@@ -116,6 +123,68 @@ int metalq_run(mq_context_t ctx, uint32_t num_qubits, const mq_gate_t *gates,
 int metalq_gradient_adjoint(mq_context_t ctx, uint32_t num_qubits,
                             const mq_gate_t *gates, uint32_t num_gates,
                             void *hamiltonian, double *out_gradients);
+
+/**
+ * Compute gradient using Adjoint Differentiation, optionally fused with the
+ * energy <psi|H|psi> in the same GPU pass.
+ *
+ * This is the real implementation behind metalq_gradient_adjoint. After the
+ * co-state build (|psi> = U|0...0>, |lambda> = H|psi>), while |psi> still
+ * holds the full forward state, it additionally evaluates
+ * E = Re<psi|lambda> = <psi|H|psi> with one extra fused Pauli-string
+ * reduction dispatch in the SAME command buffer as the forward pass and
+ * co-state build, so the intra-command-buffer serial ordering guarantees it
+ * reads the correct (pre-uncompute) state. This avoids a second full forward
+ * pass through the circuit compared to calling metalq_expectation and
+ * metalq_gradient_adjoint separately.
+ *
+ * @param out_gradients Flat gradient buffer (one entry per gate parameter,
+ *                       0 for non-differentiable gate types). Must not be NULL.
+ * @param out_energy    Receives <psi|H|psi>. May be NULL to skip the energy
+ *                       computation entirely (matches the plain
+ *                       metalq_gradient_adjoint behavior).
+ */
+int metalq_gradient_adjoint_energy(mq_context_t ctx, uint32_t num_qubits,
+                                   const mq_gate_t *gates, uint32_t num_gates,
+                                   void *hamiltonian, double *out_gradients,
+                                   double *out_energy);
+
+/**
+ * Compute <psi|H|psi> entirely on GPU.
+ *
+ * Runs the circuit, then for each Pauli term applies the Pauli string and
+ * reduces the inner product on GPU. Only per-term partial sums are read back.
+ *
+ * @param hamiltonian mq_hamiltonian_t*
+ * @param out_value   Receives the real expectation value.
+ */
+int metalq_expectation(mq_context_t ctx, uint32_t num_qubits,
+                       const mq_gate_t *gates, uint32_t num_gates,
+                       void *hamiltonian, double *out_value);
+
+/**
+ * Sample `shots` measurement outcomes entirely on GPU, without reading the full
+ * statevector back to the host.
+ *
+ * Runs the circuit (|psi> = U|0...0>), reduces |amp|^2 into per-256-element
+ * block sums on GPU, then resolves each shot with a two-level inverse-CDF walk:
+ * a binary search over the block sums followed by a walk within the chosen
+ * 256-element block, reading only that block's page from the shared
+ * (unified-memory) statevector buffer. The statevector never leaves the GPU.
+ *
+ * @param shots       Number of samples to draw.
+ * @param seed        PRNG seed. Identical seeds produce identical samples
+ *                    (deterministic splitmix64 stream).
+ * @param out_samples Caller-allocated array of `shots` uint32 entries; each is
+ *                    filled with a sampled basis-state index (little-endian,
+ *                    qubit 0 = LSB). uint32 is sufficient (simulator caps at 30
+ *                    qubits).
+ *
+ * Returns 0 on success, non-zero on error.
+ */
+int metalq_sample(mq_context_t ctx, uint32_t num_qubits, const mq_gate_t *gates,
+                  uint32_t num_gates, uint32_t shots, uint64_t seed,
+                  uint32_t *out_samples);
 
 #ifdef __cplusplus
 }

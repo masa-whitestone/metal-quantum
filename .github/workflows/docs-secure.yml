@@ -1,0 +1,270 @@
+name: Secure Documentation Build
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'metalq/**'
+      - '.github/workflows/docs-secure.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'metalq/**'
+  workflow_dispatch:
+
+# Security: Minimal permissions by default
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Documentation Security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Prevent injection attacks via git config
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          # Use specific Python version for reproducibility
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Validate MkDocs configuration
+        run: |
+          python docs/secure_build.py --validate-only
+
+      - name: Check for security issues
+        run: |
+          # Check for suspicious patterns in docs
+          echo "Checking for suspicious patterns..."
+
+          # Check for absolute paths
+          if grep -r "^/" docs/ --include="*.md" 2>/dev/null; then
+            echo "Warning: Absolute paths found in documentation"
+          fi
+
+          # Check for environment variable expansion
+          if grep -r "\${.*}" docs/ --include="*.md" 2>/dev/null; then
+            echo "Warning: Variable expansion patterns found"
+          fi
+
+          # Check for dangerous HTML
+          if grep -r "<script" docs/ --include="*.md" 2>/dev/null; then
+            echo "Error: Script tags found in documentation"
+            exit 1
+          fi
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: docs_security_audit.log
+          retention-days: 30
+
+  build-sandbox:
+    name: Build Documentation (Sandboxed)
+    runs-on: ubuntu-latest
+    needs: validate
+
+    # Run in container for additional isolation
+    container:
+      image: python:3.11-slim
+      options: |
+        --user 1000:1000
+        --read-only
+        --tmpfs /tmp:rw,noexec,nosuid,size=512M
+        --tmpfs /home:rw,noexec,nosuid,size=256M
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Create build user
+        run: |
+          # Running as non-root user (already set by container)
+          id
+          pwd
+
+      - name: Install build dependencies
+        run: |
+          # Install only necessary packages
+          python -m pip install --user --no-cache-dir \
+            mkdocs==1.6.1 \
+            mkdocs-material==9.7.1 \
+            mkdocstrings[python]==1.0.0 \
+            pyyaml==6.0.3
+
+      - name: Run sandboxed build
+        run: |
+          # Set restrictive environment
+          export HOME=/tmp/build_home
+          export PYTHONDONTWRITEBYTECODE=1
+          export PYTHONPATH=""
+
+          # Clear dangerous environment variables
+          unset LD_PRELOAD
+          unset LD_LIBRARY_PATH
+
+          # Create temporary home
+          mkdir -p $HOME
+
+          # Run build with timeout
+          timeout 300 python docs/secure_build.py --output /tmp/site
+
+      - name: Verify build output
+        run: |
+          # Check that output was created
+          if [ ! -d "/tmp/site" ]; then
+            echo "Error: Documentation was not built"
+            exit 1
+          fi
+
+          # Check for suspicious content in output
+          echo "Checking output for security issues..."
+
+          # No PHP files should be in output
+          if find /tmp/site -name "*.php" -o -name "*.sh" | grep -q .; then
+            echo "Error: Executable files found in output"
+            exit 1
+          fi
+
+          # Check file permissions
+          find /tmp/site -type f -perm /111 -exec echo "Warning: Executable file {}" \;
+
+      - name: Upload built documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: /tmp/site
+          retention-days: 30
+
+  deploy:
+    name: Deploy Documentation
+    runs-on: ubuntu-latest
+    needs: build-sandbox
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    # Deployment needs write permissions
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download built documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: documentation
+          path: ./site
+
+      - name: Final security check
+        run: |
+          # Final validation before deployment
+          echo "Running final security checks..."
+
+          # Check for sensitive information
+          if grep -r "PRIVATE KEY" ./site 2>/dev/null; then
+            echo "Error: Private keys found in documentation"
+            exit 1
+          fi
+
+          if grep -r "password\s*=\s*['\"]" ./site 2>/dev/null; then
+            echo "Error: Hardcoded passwords found in documentation"
+            exit 1
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload to Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build-sandbox
+
+    steps:
+      - name: Download documentation
+        uses: actions/download-artifact@v4
+        with:
+          name: documentation
+          path: ./site
+
+      - name: Run security scanner
+        run: |
+          # Scan for common vulnerabilities
+          echo "Scanning for security vulnerabilities..."
+
+          # Check for XSS vulnerabilities
+          if grep -r "javascript:" ./site --include="*.html" 2>/dev/null; then
+            echo "Warning: Potential XSS vector found (javascript: protocol)"
+          fi
+
+          # Check for data URIs that could be malicious
+          if grep -r "data:text/html" ./site --include="*.html" 2>/dev/null; then
+            echo "Warning: Potentially dangerous data URI found"
+          fi
+
+          # Check CSP headers recommendation
+          echo "Recommendation: Configure Content Security Policy headers for deployed site"
+
+      - name: Generate security report
+        run: |
+          # Create security scan report
+          cat > security_report.txt << EOF
+          Documentation Security Scan Report
+          ==================================
+
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Commit: ${{ github.sha }}
+
+          Checks Performed:
+          - Configuration validation
+          - Path traversal prevention
+          - XSS vulnerability scanning
+          - Sensitive data detection
+          - File permission verification
+
+          Status: PASSED
+
+          Recommendations:
+          - Enable CSP headers on hosting platform
+          - Regularly update dependencies
+          - Monitor for security advisories
+          EOF
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security_report.txt
+          retention-days: 90

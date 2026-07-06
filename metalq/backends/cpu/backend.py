@@ -136,16 +136,15 @@ class CPUBackend(Backend):
                     hamiltonian: 'Hamiltonian',
                     params: Optional[Union[Dict, List[float]]] = None) -> float:
         """Compute expectation value."""
+        from ...spin import PauliTerm, Hamiltonian
+        if isinstance(hamiltonian, PauliTerm):
+            hamiltonian = Hamiltonian([hamiltonian])
+
         sv = self.statevector(circuit, params)
-        
-        # <ψ|H|ψ> = ψ† H ψ
-        n = circuit.num_qubits
-        H_matrix = hamiltonian.to_matrix(n)
-        
-        # Use efficient conjugate transpose
-        expectation = np.real(np.vdot(sv, H_matrix @ sv))
-        
-        return float(expectation)
+
+        # <ψ|H|ψ> term-wise, without the dense 2^n x 2^n matrix
+        from .statevector import expectation_from_statevector
+        return expectation_from_statevector(sv, hamiltonian, circuit.num_qubits)
     
     def gradient(self, 
                  circuit: 'Circuit', 
