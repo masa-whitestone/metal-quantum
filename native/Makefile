@@ -15,8 +15,18 @@ OBJS = $(SRCS:$(SRC_DIR)/%.m=$(BUILD_DIR)/%.o)
 TARGET_LIB = $(BUILD_DIR)/libmetalq.dylib
 METALLIB = $(BUILD_DIR)/default.metallib
 
+# Copy of the build products inside the Python package, so wheel/editable
+# installs ship working binaries (issue #7). The backend prefers native/build
+# in a dev tree and falls back to metalq/lib; the native dladdr lookup finds
+# default.metallib next to whichever dylib was loaded.
+PYLIB_DIR = ../metalq/lib
+
 # Targets
-all: $(TARGET_LIB) $(METALLIB)
+all: $(TARGET_LIB) $(METALLIB) pylib
+
+pylib: $(TARGET_LIB) $(METALLIB)
+	@mkdir -p $(PYLIB_DIR)
+	cp -f $(TARGET_LIB) $(METALLIB) $(PYLIB_DIR)/
 
 $(TARGET_LIB): $(OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -35,4 +45,4 @@ $(METALLIB): $(SRC_DIR)/quantum_gates.metal $(SRC_DIR)/adjoint.metal
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean
+.PHONY: all clean pylib

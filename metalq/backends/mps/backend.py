@@ -221,11 +221,17 @@ class MPSBackend(Backend):
     def _load_library(self):
         """Load the native shared library with security validation."""
         lib_name = "libmetalq.dylib"
-        # Secure search paths (avoid system directories that could be compromised)
+        # Secure search paths (avoid system directories that could be compromised).
+        # Dev-tree builds (native/build) take priority over the packaged copy so
+        # a fresh `make` always wins during development.
         paths = [
             os.path.abspath(f"native/build/{lib_name}"),
             os.path.join(os.path.dirname(__file__), "../../../native/build", lib_name),
             os.path.join(os.path.dirname(__file__), "../../../../native/build", lib_name),
+            # Wheel/editable installs: binaries shipped inside the package
+            # (metalq/lib, populated by `make` — default.metallib sits next to
+            # the dylib, where the native dladdr lookup finds it).
+            os.path.join(os.path.dirname(__file__), "../../lib", lib_name),
             # Avoid /usr/local/lib for security - can be world-writable
             os.path.expanduser(f"~/.metalq/lib/{lib_name}"),
         ]

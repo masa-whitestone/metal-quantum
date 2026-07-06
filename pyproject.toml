@@ -54,8 +54,12 @@ Repository = "https://github.com/masa-whitestone/metal-quantum.git"
 Issues = "https://github.com/masa-whitestone/metal-quantum/issues"
 
 [tool.setuptools]
-packages = ["metalq"]
 include-package-data = true
+
+# Recursive discovery: metalq.backends / adapters / algorithms / torch must
+# ship in the wheel (issue #7 — packages = ["metalq"] dropped all subpackages).
+[tool.setuptools.packages.find]
+include = ["metalq*"]
 
 [tool.setuptools.package-data]
 metalq = ["lib/*.dylib", "lib/*.metallib"]
