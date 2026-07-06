@@ -180,13 +180,15 @@ class PauliTerm:
             else:
                 qubit_ops[qubit] = pauli
         
-        # Tensor product
-        matrices = [_PAULI_MATRICES[qubit_ops[q]] for q in range(num_qubits)]
-        
+        # Tensor product, little-endian (Qiskit convention): qubit 0 is the
+        # least-significant bit of the statevector index, so it must be the
+        # LAST kron factor.
+        matrices = [_PAULI_MATRICES[qubit_ops[q]] for q in reversed(range(num_qubits))]
+
         result = matrices[0]
         for m in matrices[1:]:
             result = np.kron(result, m)
-        
+
         return self.coeff * result
     
     @staticmethod

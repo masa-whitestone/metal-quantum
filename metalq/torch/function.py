@@ -31,14 +31,23 @@ class QuantumFunction(torch.autograd.Function):
         ctx.circuit = circuit
         ctx.hamiltonian = hamiltonian
         ctx.backend = backend
-        
+
         # Convert tensor to list for backend
         params_list = params_tensor.detach().numpy().tolist()
         ctx.params_list = params_list
-        
-        # Calculate Expectation
-        exp_val = backend.expectation(circuit, hamiltonian, params_list)
-        
+
+        # If a gradient will be needed, fuse the forward pass that computes it
+        # with the energy evaluation (avoids running the circuit twice: once
+        # here, once again in backward() via backend.gradient()). Backends
+        # that can't fuse (or don't need to) fall back internally to plain
+        # expectation() + gradient(), so this is always safe to call.
+        if ctx.needs_input_grad[0]:
+            exp_val, grads = backend.expectation_and_gradient(circuit, hamiltonian, params_list)
+            ctx.grads = grads
+        else:
+            exp_val = backend.expectation(circuit, hamiltonian, params_list)
+            ctx.grads = None
+
         # Return as tensor
         ctx.save_for_backward(params_tensor)
         return torch.tensor(exp_val, dtype=params_tensor.dtype)
@@ -52,15 +61,18 @@ class QuantumFunction(torch.autograd.Function):
         circuit = ctx.circuit
         hamiltonian = ctx.hamiltonian
         backend = ctx.backend
-        
-        # We need gradients w.r.t parameters
-        # Call backend.gradient
-        # If backend supports 'adjoint', it will be fast. 
-        # Only MPS supports 'adjoint' currently.
-        
-        method = 'adjoint' if backend.name == 'mps' else 'parameter_shift'
-        
-        grads = backend.gradient(circuit, hamiltonian, ctx.params_list, method=method)
+
+        if ctx.grads is not None:
+            # Already computed in forward() via the fused expectation_and_gradient
+            # path -- no need to run the circuit a second time here.
+            grads = ctx.grads
+        else:
+            # forward() didn't anticipate needing a gradient (e.g. called under
+            # a no-grad context that later got overridden); compute it now.
+            # If backend supports 'adjoint', it will be fast.
+            # Only MPS supports 'adjoint' currently.
+            method = 'adjoint' if backend.name == 'mps' else 'parameter_shift'
+            grads = backend.gradient(circuit, hamiltonian, ctx.params_list, method=method)
         
         # Chain Rule Mapping (Gate Grads -> Circuit Param Grads)
         # backend.gradient returns flat array of gradients for every gate parameter.

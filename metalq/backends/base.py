@@ -110,8 +110,32 @@ class Backend(ABC):
             Gradient array of shape (num_params,)
         """
         pass
-    
-    def sample(self, 
+
+    def expectation_and_gradient(self,
+                                  circuit: 'Circuit',
+                                  hamiltonian: 'Hamiltonian',
+                                  params: List[float]):
+        """
+        Compute the expectation value and its gradient together.
+
+        Default implementation: calls expectation() then gradient() (two
+        forward passes). Backends that can fuse both into a single GPU pass
+        (e.g. MPSBackend) should override this for a real speedup.
+
+        Args:
+            circuit: Parameterized circuit
+            hamiltonian: Observable
+            params: Current parameter values
+
+        Returns:
+            (energy, gradient) tuple: energy is a float, gradient is an
+            np.ndarray of shape (num_params,)
+        """
+        energy = self.expectation(circuit, hamiltonian, params)
+        grad = self.gradient(circuit, hamiltonian, params)
+        return energy, grad
+
+    def sample(self,
                circuit: 'Circuit', 
                shots: int,
                params: Optional[Union[Dict, List[float]]] = None) -> Dict[str, int]:
