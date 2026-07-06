@@ -3,7 +3,7 @@ metalq/backends/mps/backend.py - Metal Performance Shaders (MPS) Backend
 
 Python side wrapper for the native Metal backend with enhanced error handling.
 """
-from typing import Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 import numpy as np
 import time
 import os
@@ -801,7 +801,7 @@ class MPSBackend(Backend):
         return np.array(final_grads)
 
     def expectation_and_gradient(self, circuit: 'Circuit', hamiltonian: 'Hamiltonian',
-                                  params: List[float]):
+                                  params: List[float]) -> Tuple[float, np.ndarray]:
         """
         Compute <H> and its gradient in ONE fused GPU pass via the native
         adjoint kernel (metalq_gradient_adjoint_energy) instead of running the
@@ -816,8 +816,7 @@ class MPSBackend(Backend):
           - the loaded dylib predates metalq_gradient_adjoint_energy.
 
         Returns:
-            (energy, gradient) tuple: energy is a float, gradient is an
-            np.ndarray of shape (num_params,).
+            Tuple of the energy and the gradient array of shape (num_params,).
         """
         from ...parameter import is_parameterized
         needs_fallback = any(

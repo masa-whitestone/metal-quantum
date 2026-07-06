@@ -14,6 +14,7 @@ on:
       - 'docs/**'
       - 'mkdocs.yml'
       - 'metalq/**'
+      - '.github/workflows/docs-secure.yml'
   workflow_dispatch:
 
 # Security: Minimal permissions by default
@@ -82,13 +83,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: validate
 
-    # Run in container for additional isolation
+    # Run in container for additional isolation. Container options must be a
+    # single line: a multi-line value is passed to `docker create` with
+    # embedded newlines and fails with "invalid reference format".
+    # /tmp allows exec because secure_build.py creates and runs a venv there
+    # (rootfs stays read-only, nosuid, non-root user).
     container:
       image: python:3.11-slim
-      options: |
+      options: >-
         --user 1000:1000
         --read-only
-        --tmpfs /tmp:rw,noexec,nosuid,size=512M
+        --tmpfs /tmp:rw,nosuid,size=1024M
         --tmpfs /home:rw,noexec,nosuid,size=256M
 
     steps:
@@ -97,25 +102,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Create build user
+      - name: Show build user
         run: |
-          # Running as non-root user (already set by container)
+          # Running as non-root user (set by container options)
           id
           pwd
 
       - name: Install build dependencies
         run: |
-          # Install only necessary packages
-          python -m pip install --user --no-cache-dir \
-            mkdocs==1.6.1 \
-            mkdocs-material==9.7.1 \
-            mkdocstrings[python]==1.0.0 \
-            pyyaml==6.0.3
+          # secure_build.py needs only pyyaml itself; it creates its own
+          # sandbox venv and installs the pinned mkdocs toolchain inside it.
+          python -m pip install --user --no-cache-dir pyyaml
 
       - name: Run sandboxed build
         run: |
           # Set restrictive environment
-          export HOME=/tmp/build_home
           export PYTHONDONTWRITEBYTECODE=1
           export PYTHONPATH=""
 
@@ -123,11 +124,8 @@ jobs:
           unset LD_PRELOAD
           unset LD_LIBRARY_PATH
 
-          # Create temporary home
-          mkdir -p $HOME
-
           # Run build with timeout
-          timeout 300 python docs/secure_build.py --output /tmp/site
+          timeout 600 python docs/secure_build.py --output /tmp/site
 
       - name: Verify build output
         run: |
@@ -156,57 +154,11 @@ jobs:
           path: /tmp/site
           retention-days: 30
 
-  deploy:
-    name: Deploy Documentation
-    runs-on: ubuntu-latest
-    needs: build-sandbox
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    # Deployment needs write permissions
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    steps:
-      - name: Download built documentation
-        uses: actions/download-artifact@v4
-        with:
-          name: documentation
-          path: ./site
-
-      - name: Final security check
-        run: |
-          # Final validation before deployment
-          echo "Running final security checks..."
-
-          # Check for sensitive information
-          if grep -r "PRIVATE KEY" ./site 2>/dev/null; then
-            echo "Error: Private keys found in documentation"
-            exit 1
-          fi
-
-          if grep -r "password\s*=\s*['\"]" ./site 2>/dev/null; then
-            echo "Error: Hardcoded passwords found in documentation"
-            exit 1
-          fi
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload to Pages
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./site
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
+  # NOTE: no deploy job here on purpose. Deployment is owned by docs.yml
+  # (mkdocs gh-deploy -> gh-pages branch); a second deployment path via
+  # actions/deploy-pages requires the incompatible "GitHub Actions" Pages
+  # source and the two methods race each other. This workflow validates and
+  # builds in a sandbox as a CI check only.
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest

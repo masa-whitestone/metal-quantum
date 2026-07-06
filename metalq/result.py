@@ -10,7 +10,7 @@ Example:
     print(result.most_frequent())  # '00'
 """
 from __future__ import annotations
-from typing import Dict, Optional, List, Union
+from typing import Callable, Dict, Optional, List, Union
 import numpy as np
 
 
@@ -140,10 +140,10 @@ class Result:
             return 0.0
         return self._counts.get(bitstring, 0) / total
     
-    def expectation_from_counts(self, observable_fn) -> float:
+    def expectation_from_counts(self, observable_fn: 'Callable[[str], float]') -> float:
         """
         Compute expectation value from counts using a function.
-        
+
         Args:
             observable_fn: Function mapping bitstring to observable value
             

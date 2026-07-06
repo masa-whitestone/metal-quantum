@@ -3,6 +3,7 @@ Metal-Q High-Level API.
 Provides simple functions to run circuits and calculate expectations without managing backend instances manually.
 """
 from typing import Optional, List, Dict, Union, Any
+import numpy as np
 
 from .circuit import Circuit
 from .spin import Hamiltonian
@@ -76,19 +77,19 @@ def expect(circuit: Circuit,
     bk = get_backend(backend)
     return bk.expectation(circuit, hamiltonian, params=params)
 
-def statevector(circuit: Circuit, 
-                backend: str = 'mps', 
-                params: Optional[Union[Dict, List[float]]] = None):
+def statevector(circuit: Circuit,
+                backend: str = 'mps',
+                params: Optional[Union[Dict, List[float]]] = None) -> 'np.ndarray':
     """
     Get the statevector of a circuit.
-    
+
     Args:
         circuit: The quantum circuit.
         backend: Backend name.
         params: Parameters to bind.
-        
+
     Returns:
-        numpy.ndarray: Statevector.
+        The final statevector as a complex numpy array of length 2^n.
     """
     bk = get_backend(backend)
     return bk.statevector(circuit, params=params)

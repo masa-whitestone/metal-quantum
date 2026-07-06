@@ -19,7 +19,7 @@ Example:
     energy = mq.expect(qc, H)
 """
 from __future__ import annotations
-from typing import List, Tuple, Union, Optional, Set
+from typing import Any, List, Tuple, Union, Optional, Set
 from dataclasses import dataclass, field
 import numpy as np
 
@@ -382,12 +382,12 @@ class Hamiltonian:
         
         return result
     
-    def to_sparse(self, num_qubits: Optional[int] = None):
+    def to_sparse(self, num_qubits: Optional[int] = None) -> Any:
         """
         Convert to sparse matrix representation.
-        
+
         Returns:
-            scipy.sparse matrix
+            The operator as a scipy.sparse.csr_matrix (scipy is imported lazily).
         """
         from scipy import sparse
         return sparse.csr_matrix(self.to_matrix(num_qubits))

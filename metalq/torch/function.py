@@ -21,11 +21,11 @@ class QuantumFunction(torch.autograd.Function):
     def forward(ctx, params_tensor, circuit, hamiltonian, backend):
         """
         Args:
-            ctx: Context object to save info for backward.
-            params_tensor: Tensor of shape (n_params,) containing parameter values.
-            circuit: Metal-Q Circuit object (parameterized).
-            hamiltonian: Metal-Q Hamiltonian/PauliTerm.
-            backend: Initialized Metal-Q backend instance.
+            ctx (torch.autograd.function.FunctionCtx): Context object to save info for backward.
+            params_tensor (torch.Tensor): Tensor of shape (n_params,) containing parameter values.
+            circuit (Circuit): Metal-Q Circuit object (parameterized).
+            hamiltonian (Hamiltonian): Metal-Q Hamiltonian/PauliTerm.
+            backend (Backend): Initialized Metal-Q backend instance.
         """
         # Save context for backward
         ctx.circuit = circuit
