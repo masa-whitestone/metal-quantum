@@ -88,10 +88,13 @@ jobs:
     # embedded newlines and fails with "invalid reference format".
     # /tmp allows exec because secure_build.py creates and runs a venv there
     # (rootfs stays read-only, nosuid, non-root user).
+    # The uid MUST be 1001 (the hosted-runner user): the runner mounts
+    # host-owned dirs (e.g. _runner_file_commands) into the container, and
+    # any other uid fails their writes with EACCES.
     container:
       image: python:3.11-slim
       options: >-
-        --user 1000:1000
+        --user 1001:1001
         --read-only
         --tmpfs /tmp:rw,nosuid,size=1024M
         --tmpfs /home:rw,noexec,nosuid,size=256M
