@@ -12,12 +12,14 @@ Metal-Q is a comprehensive quantum computing library designed specifically for A
 
 ### Key Features
 
-*   **GPU Acceleration**: Up to 50x faster than standard CPU simulators for statevector simulation using Metal Compute Shaders.
-*   **Adjoint Differentiation**: Native GPU implementation of Adjoint Differentiation, enabling gradient calculation with O(1) memory cost relative to circuit depth, crucial for training large variational circuits.
+*   **GPU Acceleration**: 3–20x faster than Qiskit Aer for statevector simulation, expectation values, and sampling using Metal Compute Shaders (measured on Apple M3 Pro, see [Performance](#performance)).
+*   **GPU-Resident Expectation Values**: Fused Pauli-string kernels evaluate `<psi|H|psi>` entirely on the GPU — one pass per Hamiltonian term, no statevector readback, ~1e-7 agreement with double-precision references.
+*   **Adjoint Differentiation**: Native GPU implementation computing all circuit gradients in O(gates) — 25x faster than parameter-shift at 40 parameters. A fused energy+gradient call runs one forward pass per VQE iteration.
+*   **GPU-Resident Sampling**: Measurement sampling without reading the statevector back to the CPU (10^6 shots at 24 qubits in ~0.7 s including circuit execution).
 *   **PyTorch Integration**: Built-in autograd functions allow Metal-Q circuits to act as standard PyTorch layers, enabling hybrid quantum-classical model training.
 *   **Algorithms**: Ready-to-use implementations of VQE (Variational Quantum Eigensolver) and QAOA (Quantum Approximate Optimization Algorithm).
 *   **Qiskit Compatibility**: Includes a bidirectional adapter to convert circuits to/from Qiskit `QuantumCircuit`.
-*   **Native API**: A lightweight, intuitive Python API for circuit construction and execution.
+*   **Fail-Closed Validation**: Unsupported gates raise a clear `ValidationError` instead of silently corrupting results; all inputs and native-library calls are validated (see [docs/SECURITY.md](docs/SECURITY.md)).
 
 ## Installation
 
@@ -25,8 +27,8 @@ Metal-Q is a comprehensive quantum computing library designed specifically for A
 
 *   macOS 12.0+ (Monterey or later)
 *   Apple Silicon (M1/M2/M3/M4) Mac
-*   Python 3.9+
-*   Xcode Command Line Tools
+*   Python 3.10+
+*   Xcode Command Line Tools (source builds only — the PyPI wheel ships prebuilt binaries)
 
 ### Install from PyPI
 
@@ -129,46 +131,52 @@ qc_back = to_qiskit(mq_circuit)
 
 ## Performance
 
-Benchmarks on Apple M3 Pro (36GB RAM) demonstrate significant performance improvements over CPU-based simulators. Metal-Q excels particularly with larger qubit counts and deep circuits such as Quantum Fourier Transform (QFT).
+Benchmarks against Qiskit Aer 0.17 (statevector method) on identical circuits.
+Measured 2026-07 on an Apple M3 Pro; minimum of repeated runs after warmup.
 
-### Statevector Simulation (Random Circuit)
+### Statevector Simulation (3-layer RY/RZ + CX-chain circuit)
 
-| Qubits | Depth | Metal-Q | Qiskit | Speedup |
-|--------|-------|---------|--------|---------|
-| 16     | 10    | 2ms     | 43ms   | **17.9x** |
-| 20     | 10    | 20ms    | 1025ms | **50.2x** |
-| 22     | 10    | 217ms   | 4976ms | **22.9x** |
-| 24     | 8     | 775ms   | 16999ms| **21.9x** |
-| 26     | 6     | 2510ms  | 54967ms| **21.9x** |
+| Qubits | Metal-Q | Qiskit Aer | Speedup |
+|--------|---------|------------|---------|
+| 16     | 1.9ms   | 39ms       | **20.3x** |
+| 20     | 6.4ms   | 98ms       | **15.3x** |
+| 22     | 66ms    | 284ms      | **4.3x** |
+| 24     | 286ms   | 945ms      | **3.3x** |
 
 ### Quantum Fourier Transform (QFT)
 
-| Qubits | Metal-Q | Qiskit | Speedup |
-|--------|---------|--------|---------|
-| 16     | 1ms     | 24ms   | **18.6x** |
-| 20     | 14ms    | 664ms  | **47.9x** |
-| 22     | 137ms   | 3284ms | **23.9x** |
-| 24     | 643ms   | 14932ms| **23.2x** |
+| Qubits | Metal-Q | Qiskit Aer | Speedup |
+|--------|---------|------------|---------|
+| 16     | 2.1ms   | 40ms       | **19.3x** |
+| 20     | 11ms    | 97ms       | **8.8x** |
+| 22     | 133ms   | 286ms      | **2.2x** |
+| 24     | 620ms   | 994ms      | **1.6x** |
 
 ### Sampling (Shots=8192)
 
 | Qubits | Metal-Q | Qiskit Aer | Speedup |
 |--------|---------|------------|---------|
-| 16     | 9ms     | 16ms       | **1.9x** |
-| 20     | 34ms    | 143ms      | **4.2x** |
-| 22     | 273ms   | 511ms      | **1.9x** |
-| 24     | 974ms   | 1540ms     | **1.6x** |
+| 16     | 4.6ms   | 46ms       | **10.1x** |
+| 20     | 11ms    | 109ms      | **10.2x** |
+| 22     | 69ms    | 302ms      | **4.4x** |
+| 24     | 289ms   | 967ms      | **3.3x** |
 
-*Benchmarks run on Apple M3 Pro (36GB RAM). Metal-Q uses half-precision complex numbers (MPS limit), while Qiskit uses double precision.*
+*Metal-Q simulates in single-precision complex (complex64) with GPU reductions
+accumulated in double precision — expectation values agree with double-precision
+references to ~1e-7 at 24 qubits. Qiskit Aer uses double precision throughout.*
 
 ## Documentation
 
 *   **`metalq.Circuit`**: Core class for circuit construction.
-*   **`metalq.run(circuit, backend='mps')`**: Execute circuits.
-*   **`metalq.expect(circuit, hamiltonian)`**: Calculate expectation values.
+*   **`metalq.run(circuit, backend='mps')`**: Execute circuits (GPU-resident sampling when `shots > 0`).
+*   **`metalq.expect(circuit, hamiltonian)`**: Calculate expectation values (GPU-resident fused Pauli kernels).
 *   **`metalq.statevector(circuit)`**: Get the final statevector.
+*   **`Backend.expectation_and_gradient(circuit, hamiltonian, params)`**: Fused energy + gradients in a single forward pass (adjoint differentiation).
 *   **`metalq.torch`**: PyTorch integration modules (`QuantumLayer`, `QuantumFunction`).
 *   **`metalq.algorithms`**: VQE and QAOA implementations.
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for known gaps and planned improvements,
+and [docs/SECURITY.md](docs/SECURITY.md) for the security model.
 
 ## Examples
 
@@ -191,7 +199,8 @@ Metal-Q is built with a layered architecture to maximize performance while maint
 ## Limitations
 
 *   **Apple Silicon Only**: Requires macOS devices with Metal support.
-*   **Statevector Simulation**: Memory usage grows exponentially (2^N). 30 qubits is the hard limit on most machines (requires ~16GB RAM for statevector).
+*   **Statevector Simulation**: Memory usage grows exponentially (2^N). 30 qubits is the enforced limit (~8GB for the complex64 statevector).
+*   **Single Precision**: The statevector is complex64 (GPU reductions accumulate in double precision); workloads needing full double-precision amplitudes should use the CPU backend.
 *   **Noise Models**: v1.0 supports ideal simulation only.
 
 ## License
