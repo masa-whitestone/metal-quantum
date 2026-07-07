@@ -24,8 +24,21 @@ class CPUBackend(Backend):
     - Polars: 並列集計で測定結果処理を高速化
     """
     
-    def __init__(self):
-        """Initialize CPU backend."""
+    def __init__(self,
+                 fusion: bool = True,
+                 max_fused_qubits: int = 4):
+        """Initialize CPU backend.
+
+        Args:
+            fusion: Fuse consecutive gates into multi-qubit blocks and
+                apply each block as one Accelerate GEMM (AMX-accelerated
+                on Apple Silicon). Falls back to per-gate kernels when
+                False.
+            max_fused_qubits: Maximum qubits per fused block (block
+                matrices are 2^k x 2^k).
+        """
+        self._fusion = fusion
+        self._max_fused_qubits = max_fused_qubits
         self._check_dependencies()
     
     def _check_dependencies(self):
@@ -123,12 +136,16 @@ class CPUBackend(Backend):
         sv = initialize_statevector(circuit.num_qubits)
         
         # Apply gates
-        if self._has_numba:
+        if self._fusion:
+            from .fusion import apply_gates_fused
+            sv = apply_gates_fused(sv, circuit._gates, circuit.num_qubits,
+                                   max_fused=self._max_fused_qubits)
+        elif self._has_numba:
             from .gates import apply_gates_numba
             sv = apply_gates_numba(sv, circuit._gates, circuit.num_qubits)
         else:
             sv = apply_gates(sv, circuit._gates, circuit.num_qubits)
-        
+
         return sv
     
     def expectation(self, 
