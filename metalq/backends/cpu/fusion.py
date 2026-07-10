@@ -189,8 +189,24 @@ def _expand_diag(diag: np.ndarray,
     return diag[idx]
 
 
-def _is_diagonal(mat: np.ndarray) -> bool:
-    return np.count_nonzero(mat - np.diag(np.diagonal(mat))) == 0
+# 常に対角なゲート名。行列値ではなく名前で判定することで、融合計画が
+# パラメータ値に依存しなくなり、回路構造キーでキャッシュできる
+# (crx(0)=I のような「特殊値でだけ対角」のケースは dense に落ちるが
+# 正しさは変わらない)。
+_DIAG_GATES = frozenset({
+    'id', 'i', 'z', 's', 'sdg', 't', 'tdg', 'rz', 'p', 'u1',
+    'cz', 'crz', 'cp', 'cu1', 'rzz', 'ccz',
+})
+
+
+class FusionPlan(NamedTuple):
+    """Parameter-independent fusion plan for a circuit structure.
+
+    bounds はフィルタ済みゲート列 (barrier 除去後) 上の区間
+    [start, end) と種別。同じ構造 (ゲート名 + qubit 列) の回路なら
+    パラメータ値が違っても再利用できる。
+    """
+    bounds: Tuple[Tuple[int, int, str], ...]   # (start, end, kind)
 
 
 def _gate_fields(gate: Any) -> Tuple[str, List[int], List]:
@@ -203,27 +219,52 @@ def _gate_fields(gate: Any) -> Tuple[str, List[int], List]:
     return name, list(qubits), params
 
 
-def _build_dense_block(items, num_qubits) -> DenseBlock:
+def _build_dense_block_numpy(items, union: List[int]) -> DenseBlock:
+    """Numba-free fallback: incremental _expand_matrix + matmul chain."""
     cur_mat = None
     cur_q: List[int] = []
-    for mat, qubits, _ in items:
+    for mat, qubits in items:
         if cur_mat is None:
             cur_q = sorted(set(qubits), reverse=True)
             cur_mat = _expand_matrix(mat, qubits, cur_q)
             continue
-        union = sorted(set(cur_q) | set(qubits), reverse=True)
-        block = _expand_matrix(cur_mat, cur_q, union)
-        gate_full = _expand_matrix(mat, qubits, union)
+        u = sorted(set(cur_q) | set(qubits), reverse=True)
+        block = _expand_matrix(cur_mat, cur_q, u)
+        gate_full = _expand_matrix(mat, qubits, u)
         cur_mat = gate_full @ block
-        cur_q = union
-    return DenseBlock(cur_mat, cur_q)
+        cur_q = u
+    if cur_q != union:
+        cur_mat = _expand_matrix(cur_mat, cur_q, union)
+    return DenseBlock(cur_mat, union)
 
 
-def _build_diag_block(items, num_qubits) -> DiagBlock:
-    union = sorted({q for _, qubits, _ in items for q in qubits},
+def _build_dense_block(items) -> DenseBlock:
+    union = sorted({q for _, qubits in items for q in qubits},
+                   reverse=True)
+    if not HAS_NUMBA:
+        return _build_dense_block_numpy(items, union)
+    # union を先に確定し、単位行列にゲートを順に作用させる (途中の
+    # 再埋め込みが不要になり、1 ゲート = 1 numba カーネル呼び出し)。
+    k = len(union)
+    dim = 1 << k
+    bitpos = {q: k - 1 - i for i, q in enumerate(union)}
+    m = np.eye(dim, dtype=np.complex128)
+    out = np.empty_like(m)
+    for mat, qubits in items:
+        kg = len(qubits)
+        gpos = np.asarray([bitpos[qubits[kg - 1 - t]] for t in range(kg)],
+                          dtype=np.int64)
+        _apply_gate_to_block_numba(m, out,
+                                   np.ascontiguousarray(mat), gpos, kg)
+        m, out = out, m
+    return DenseBlock(m, union)
+
+
+def _build_diag_block(items) -> DiagBlock:
+    union = sorted({q for _, qubits in items for q in qubits},
                    reverse=True)
     phases = np.ones(1 << len(union), dtype=np.complex128)
-    for mat, qubits, _ in items:
+    for mat, qubits in items:
         phases *= _expand_diag(np.diagonal(mat).copy(), qubits, union)
     return DiagBlock(phases, union)
 
@@ -295,10 +336,10 @@ def _diag_reaches(items: List, max_fused: int) -> List[int]:
     return jg
 
 
-def fuse_gates(gates: List,
-               num_qubits: int,
-               max_fused: int = DEFAULT_MAX_FUSED_QUBITS
-               ) -> List:
+def make_plan(gates: List,
+              num_qubits: int,
+              max_fused: int = DEFAULT_MAX_FUSED_QUBITS
+              ) -> FusionPlan:
     """Partition the gate list into DenseBlock / DiagBlock segments.
 
     最小コスト分割を segment DP で求める。dense 区間は union が
@@ -310,6 +351,9 @@ def fuse_gates(gates: List,
     区間コストが長さに依らないので、DP は「開始 i から終端 e へ張れる
     ⟺ 到達列 j*(i) >= e」の区間辺グラフの最短路になる。到達列は
     スライディングウィンドウ、最小化は単調両端キューで、全体 O(G)。
+
+    ゲート名と qubit 列だけに依存する (行列値は見ない) ので、返る
+    FusionPlan は同一構造の回路で再利用できる (パラメータ非依存)。
     """
     max_fused = max(1, min(max_fused, num_qubits))
     items = []
@@ -317,11 +361,10 @@ def fuse_gates(gates: List,
         name, qubits, params = _gate_fields(gate)
         if name == 'barrier':
             continue
-        mat = get_gate_matrix(name, params)
-        items.append((mat, qubits, _is_diagonal(mat)))
+        items.append((None, qubits, name in _DIAG_GATES))
     G = len(items)
     if G == 0:
-        return []
+        return FusionPlan(())
 
     jd = _dense_reaches(items, max_fused)
     jg = _diag_reaches(items, max_fused)
@@ -364,15 +407,40 @@ def fuse_gates(gates: List,
         bounds.append((s, e, kind))
         e = s
     bounds.reverse()
+    return FusionPlan(tuple(bounds))
 
+
+def build_blocks(gates: List, num_qubits: int, plan: FusionPlan) -> List:
+    """Materialize a FusionPlan into DenseBlock / DiagBlock instances.
+
+    行列の取得と合成だけを行う (計画は plan 済み)。パラメータが
+    変わっても plan は共有し、こちらだけ評価ごとに呼ぶ。
+    """
+    if not plan.bounds:
+        return []
+    items = []
+    for gate in gates:
+        name, qubits, params = _gate_fields(gate)
+        if name == 'barrier':
+            continue
+        items.append((get_gate_matrix(name, params), qubits))
     blocks = []
-    for s, e, kind in bounds:
+    for s, e, kind in plan.bounds:
         seg = items[s:e]
         if kind == 'diag':
-            blocks.append(_build_diag_block(seg, num_qubits))
+            blocks.append(_build_diag_block(seg))
         else:
-            blocks.append(_build_dense_block(seg, num_qubits))
+            blocks.append(_build_dense_block(seg))
     return blocks
+
+
+def fuse_gates(gates: List,
+               num_qubits: int,
+               max_fused: int = DEFAULT_MAX_FUSED_QUBITS
+               ) -> List:
+    """Plan + build in one call (uncached convenience wrapper)."""
+    return build_blocks(gates, num_qubits,
+                        make_plan(gates, num_qubits, max_fused))
 
 
 # ============================================================================
@@ -436,6 +504,42 @@ if HAS_NUMBA:
                     | (((dd >> t2) & 1) << f2) \
                     | (((dd >> t3) & 1) << f3)
                 dst[dd] = src[s]
+
+    @jit(nopython=True, cache=True)
+    def _apply_gate_to_block_numba(m, out, g, gpos, kg):
+        """out = (g embedded at bit positions gpos) @ m.
+
+        2^k x 2^k のブロック行列 m の行インデックスのうち gpos の
+        ビット群にゲート g を作用させる (列はバッチ)。融合ブロック
+        構築のホットパス: NumPy の tensordot/moveaxis ベースの展開
+        (~12us/ゲート) を 1-2us に置き換える。
+
+        g のインデックス規約は get_gate_matrix と同一
+        (gate_qubits[0] が MSB)。gpos[t] は g のビット t (LSB=0) が
+        載るブロック行ビット位置。
+        """
+        dim = m.shape[0]
+        dg = 1 << kg
+        mask = np.int64(0)
+        for t in range(kg):
+            mask |= np.int64(1) << gpos[t]
+        rows = np.empty(dg, dtype=np.int64)
+        for base in range(dim):
+            if base & mask:
+                continue
+            for j in range(dg):
+                r = np.int64(base)
+                for t in range(kg):
+                    if (j >> t) & 1:
+                        r |= np.int64(1) << gpos[t]
+                rows[j] = r
+            for i in range(dg):
+                ri = rows[i]
+                for col in range(dim):
+                    acc = 0.0 + 0.0j
+                    for j in range(dg):
+                        acc += g[i, j] * m[rows[j], col]
+                    out[ri, col] = acc
 
     @jit(nopython=True, parallel=True, cache=True)
     def _apply_phases_numba(sv, out, phases, bits, nbits):

@@ -54,6 +54,10 @@ class CPUBackend(Backend):
         self._fusion = fusion
         self._max_fused_qubits = max_fused_qubits
         self._dtype = dtype
+        # 融合計画のキャッシュ (回路構造キー -> FusionPlan)。VQE の
+        # parameter-shift は同一構造を 2p 回評価するため、計画 (DP)
+        # を毎回やり直さない。FIFO で上限管理。
+        self._plan_cache: Dict = {}
         self._check_dependencies()
     
     def _check_dependencies(self):
@@ -168,10 +172,23 @@ class CPUBackend(Backend):
     def _apply_fused(self, circuit: 'Circuit', return_layout: bool):
         """Run the fused path on |0...0> (parameters already bound)."""
         from .statevector import initialize_statevector
-        from .fusion import fuse_gates, apply_fused_blocks
+        from .fusion import (make_plan, build_blocks, apply_fused_blocks,
+                             _gate_fields)
+
+        key = (circuit.num_qubits, self._max_fused_qubits,
+               tuple((name, tuple(qubits))
+                     for name, qubits, _ in map(_gate_fields,
+                                                circuit._gates)))
+        plan = self._plan_cache.get(key)
+        if plan is None:
+            plan = make_plan(circuit._gates, circuit.num_qubits,
+                             self._max_fused_qubits)
+            if len(self._plan_cache) >= 32:
+                self._plan_cache.pop(next(iter(self._plan_cache)))
+            self._plan_cache[key] = plan
+
         sv = initialize_statevector(circuit.num_qubits, self._dtype)
-        blocks = fuse_gates(circuit._gates, circuit.num_qubits,
-                            self._max_fused_qubits)
+        blocks = build_blocks(circuit._gates, circuit.num_qubits, plan)
         return apply_fused_blocks(sv, blocks, circuit.num_qubits,
                                   assume_zero=True,
                                   return_layout=return_layout)

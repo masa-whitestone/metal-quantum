@@ -445,6 +445,54 @@ def test_permutation_dispatch_random_sweep(trial):
     np.testing.assert_allclose(got, ref, atol=1e-10)
 
 
+def test_plan_reuse_across_parameter_values():
+    # A FusionPlan depends only on the circuit structure (names +
+    # qubits): building blocks from the same plan with different
+    # parameter values must match a from-scratch reference.
+    from metalq.backends.cpu.fusion import make_plan, build_blocks
+    n = 5
+
+    def gates_for(thetas):
+        gates = []
+        for i, th in enumerate(thetas):
+            gates.append({'name': 'ry', 'qubits': [i % n], 'params': [th]})
+            gates.append({'name': 'rz', 'qubits': [(i + 1) % n],
+                          'params': [-th]})
+            gates.append({'name': 'cx', 'qubits': [i % n, (i + 2) % n],
+                          'params': []})
+        return gates
+
+    plan = make_plan(gates_for([0.1] * 6), n, 4)
+    for thetas in ([0.7, -1.2, 2.9, 0.0, 1.1, -0.4],
+                   [np.pi] * 6):
+        gates = gates_for(thetas)
+        blocks = build_blocks(gates, n, plan)
+        got = apply_fused_blocks(initialize_statevector(n), blocks, n)
+        ref = apply_gates(initialize_statevector(n), gates, n)
+        np.testing.assert_allclose(got, ref, atol=1e-10)
+
+
+def test_backend_plan_cache_consistency():
+    # Repeated expectation calls on same-structure circuits with
+    # different parameters go through the backend plan cache; results
+    # must keep matching the unfused reference.
+    n = 4
+    b = CPUBackend(fusion=True)
+    H = _random_hamiltonian(n, 4)
+    for _ in range(3):
+        gates = []
+        for q in range(n):
+            gates.append({'name': 'ry', 'qubits': [q],
+                          'params': [float(rng.uniform(-np.pi, np.pi))]})
+        for q in range(n - 1):
+            gates.append({'name': 'cx', 'qubits': [q, q + 1], 'params': []})
+        circ = _GateCircuit(n, gates)
+        got = b.expectation(circ, H)
+        sv_ref = CPUBackend(fusion=False).statevector(circ)
+        ref = expectation_from_statevector(sv_ref, H, n)
+        assert abs(got - ref) < 1e-9
+
+
 def test_empty_blocks_returns_fresh_array():
     # The aliasing contract is uniform: apply_fused_blocks never returns
     # the caller's own array, including the empty-blocks edge case.

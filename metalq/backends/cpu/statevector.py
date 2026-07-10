@@ -133,21 +133,36 @@ def apply_gate(sv: np.ndarray, gate: Any, num_qubits: int) -> np.ndarray:
 
 # Pre-computed gate matrices (cache)
 _GATE_CACHE = {}
+_PARAM_GATE_CACHE = {}
+_PARAM_GATE_CACHE_MAX = 4096
 
 def get_gate_matrix(name: str, params: List = None) -> np.ndarray:
-    """Get gate matrix, with caching for non-parameterized gates."""
+    """Get gate matrix, with caching.
+
+    非パラメータゲートは名前で、パラメータ付きゲートは (名前, 値) で
+    キャッシュする。parameter-shift 勾配では 1 評価あたり 1 パラメータ
+    しか動かないため、残り全ゲートの行列生成が再利用でヒットする。
+    返り値は共有されるので呼び出し側は書き換えないこと。
+    """
     params = params or []
-    
-    # Check cache for non-parameterized gates
-    if not params and name in _GATE_CACHE:
-        return _GATE_CACHE[name]
-    
-    matrix = _compute_gate_matrix(name, params)
-    
-    # Cache non-parameterized gates
+
     if not params:
-        _GATE_CACHE[name] = matrix
-    
+        matrix = _GATE_CACHE.get(name)
+        if matrix is None:
+            matrix = _compute_gate_matrix(name, params)
+            _GATE_CACHE[name] = matrix
+        return matrix
+
+    try:
+        key = (name, tuple(float(p) for p in params))
+    except (TypeError, ValueError):
+        return _compute_gate_matrix(name, params)
+    matrix = _PARAM_GATE_CACHE.get(key)
+    if matrix is None:
+        matrix = _compute_gate_matrix(name, params)
+        if len(_PARAM_GATE_CACHE) >= _PARAM_GATE_CACHE_MAX:
+            _PARAM_GATE_CACHE.clear()
+        _PARAM_GATE_CACHE[key] = matrix
     return matrix
 
 
