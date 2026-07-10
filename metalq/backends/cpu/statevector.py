@@ -30,18 +30,20 @@ def expectation_from_statevector(sv: np.ndarray, hamiltonian,
     return total
 
 
-def initialize_statevector(num_qubits: int) -> np.ndarray:
+def initialize_statevector(num_qubits: int,
+                           dtype=np.complex128) -> np.ndarray:
     """
     Initialize statevector to |0...0⟩.
-    
+
     Args:
         num_qubits: Number of qubits
-    
+        dtype: complex128 (default) or complex64
+
     Returns:
         Complex statevector of size 2^n
     """
     size = 1 << num_qubits
-    sv = np.zeros(size, dtype=np.complex128)
+    sv = np.zeros(size, dtype=dtype)
     sv[0] = 1.0
     return sv
 

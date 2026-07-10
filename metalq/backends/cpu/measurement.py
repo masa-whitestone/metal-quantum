@@ -14,30 +14,47 @@ except ImportError:
 
 
 def sample_counts(sv: np.ndarray, shots: int, num_qubits: int,
-                  use_polars: bool = True) -> Dict[str, int]:
+                  use_polars: bool = True,
+                  index_map=None) -> Dict[str, int]:
     """
     Sample measurement results from statevector.
-    
+
     Args:
-        sv: Complex statevector
+        sv: Complex statevector (complex64 or complex128)
         shots: Number of shots
         num_qubits: Number of qubits
         use_polars: Use Polars for aggregation (faster for large shots)
-    
+        index_map: Optional bit layout (fusion の lazy permutation)。
+            index_map[q] = qubit q の状態が載っているインデックスビット。
+            サンプルしたインデックスのビットだけを論理順へ戻す
+            (statevector 全体の復元パスより桁違いに安い)。
+
     Returns:
         Dict mapping bitstrings to counts
     """
-    # Compute probabilities
-    probs = np.abs(sv) ** 2
-    
-    # Normalize (handle numerical errors)
-    probs_sum = probs.sum()
+    # Compute probabilities in float64 regardless of state dtype
+    # (complex64 の確率を float32 で持つと正規化誤差が出る)
+    probs = np.square(sv.real, dtype=np.float64)
+    probs += np.square(sv.imag, dtype=np.float64)
+
+    # Normalize (handle numerical errors). In-place: probs is our own
+    # freshly-built float64 array. np.random.choice tolerates ~sqrt(eps)
+    # deviation, so 1e-10 avoids a needless full-array pass for fp64
+    # rounding noise while still fixing complex64 states (~1e-5 off).
+    probs_sum = probs.sum(dtype=np.float64)
     if abs(probs_sum - 1.0) > 1e-10:
-        probs = probs / probs_sum
-    
+        probs /= probs_sum
+
     # Sample indices
     indices = np.random.choice(len(sv), size=shots, p=probs)
-    
+
+    # Remap sampled index bits from the permuted layout to logical order
+    if index_map is not None and list(index_map) != list(range(num_qubits)):
+        remapped = np.zeros_like(indices)
+        for q, p in enumerate(index_map):
+            remapped |= ((indices >> p) & 1) << q
+        indices = remapped
+
     if use_polars and HAS_POLARS and shots >= 1000:
         # Use Polars for fast aggregation
         return _aggregate_with_polars(indices, num_qubits)
