@@ -228,14 +228,29 @@ class CPUBackend(Backend):
         return expectation_layout(sv, hamiltonian, circuit.num_qubits,
                                   pos_of)
     
-    def gradient(self, 
-                 circuit: 'Circuit', 
+    def gradient(self,
+                 circuit: 'Circuit',
                  hamiltonian: 'Hamiltonian',
                  params: List[float],
-                 method: str = 'parameter_shift') -> np.ndarray:
-        """Compute gradient using parameter-shift rule."""
+                 method: str = 'adjoint') -> np.ndarray:
+        """Compute the gradient of <H> w.r.t. the circuit parameters.
+
+        method='adjoint' (default) runs the reversible adjoint sweep
+        (~3 circuit applications for ALL parameters instead of
+        parameter-shift's 2p full executions). Circuits the adjoint
+        method cannot handle (multi-parameter gates like u2/u3/r with
+        free parameters, non-linear parameter expressions, no Numba)
+        fall back to parameter-shift automatically.
+        method='parameter_shift' forces the shift rule.
+        """
+        if method == 'adjoint':
+            from .adjoint import adjoint_gradient, AdjointUnsupported
+            try:
+                return adjoint_gradient(self, circuit, hamiltonian, params)
+            except AdjointUnsupported:
+                pass
+
         from .gradient import parameter_shift_gradient
-        
         return parameter_shift_gradient(
             self, circuit, hamiltonian, params
         )
