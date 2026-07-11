@@ -17,6 +17,17 @@ except ImportError:
     HAS_AER = False
     print("Warning: qiskit-aer not installed")
 
+# PennyLane lightning.qubit is included purely as a CPU statevector baseline.
+# PennyLane has no usable Mac GPU/Metal acceleration path: lightning.gpu is
+# NVIDIA cuQuantum only (no Apple Silicon support), and the PyTorch-MPS /
+# jax-metal interfaces it can otherwise use lack usable complex64 support.
+try:
+    import pennylane as qml
+    HAS_PENNYLANE = True
+except ImportError:
+    HAS_PENNYLANE = False
+    print("Warning: pennylane not installed")
+
 import metalq
 from metalq.adapters.qiskit_adapter import to_metalq
 
@@ -102,12 +113,38 @@ def benchmark_cpu_comparison(num_qubits: int, depth: int, num_runs: int = 3):
     except Exception as e:
         print(f"  Qiskit failed: {e}")
         results['qiskit'] = None
-    
+
+    # PennyLane lightning.qubit (CPU baseline; see note near the import above)
+    if HAS_PENNYLANE:
+        try:
+            gc.collect()
+            pennylane_fn = qml.from_qiskit(qc)
+            dev = qml.device('lightning.qubit', wires=num_qubits)
+
+            @qml.qnode(dev)
+            def pennylane_circuit():
+                pennylane_fn()
+                return qml.state()
+
+            times = []
+            for _ in range(num_runs):
+                start = time.perf_counter()
+                _ = pennylane_circuit()
+                times.append(time.perf_counter() - start)
+            results['pennylane'] = np.median(times) * 1000
+            print(f"  PennyLane lightning.qubit: {results['pennylane']:.1f}ms")
+        except Exception as e:
+            print(f"  PennyLane failed: {e}")
+            results['pennylane'] = None
+
     # Print comparison
     if results.get('metalq_cpu') and results.get('aer'):
         speedup = results['aer'] / results['metalq_cpu']
         print(f"  Speedup vs Aer: {speedup:.2f}x")
-    
+    if results.get('metalq_cpu') and results.get('pennylane'):
+        speedup = results['pennylane'] / results['metalq_cpu']
+        print(f"  Speedup vs PennyLane lightning.qubit: {speedup:.2f}x")
+
     return results
 
 
@@ -136,21 +173,25 @@ def main():
     print("\n==============================================")
     print("Summary Table")
     print("==============================================")
-    print("\n| Qubits | Depth | Metal-Q CPU | Qiskit Aer | Qiskit | Speedup vs Aer |")
-    print("|--------|-------|-------------|------------|--------|----------------|")
-    
+    print("\n| Qubits | Depth | Metal-Q CPU | Qiskit Aer | Qiskit | PennyLane (lightning.qubit) | Speedup vs Aer | Speedup vs PennyLane |")
+    print("|--------|-------|-------------|------------|--------|------------------------------|----------------|----------------------|")
+
     for r in all_results:
         mq = r.get('metalq_cpu', 0) or 0
         aer = r.get('aer', 0) or 0
         qiskit = r.get('qiskit', 0) or 0
+        pennylane_ms = r.get('pennylane', 0) or 0
         speedup = aer / mq if (mq > 0 and aer > 0) else 0
-        
+        speedup_pl = pennylane_ms / mq if (mq > 0 and pennylane_ms > 0) else 0
+
         mq_str = f"{mq:.0f}ms" if mq > 0 else "N/A"
         aer_str = f"{aer:.0f}ms" if aer > 0 else "N/A"
         qiskit_str = f"{qiskit:.0f}ms" if qiskit > 0 else "N/A"
+        pennylane_str = f"{pennylane_ms:.0f}ms" if pennylane_ms > 0 else "N/A"
         speedup_str = f"**{speedup:.2f}x**" if speedup > 0 else "N/A"
-        
-        print(f"| {r['num_qubits']:6d} | {r['depth']:5d} | {mq_str:11s} | {aer_str:10s} | {qiskit_str:6s} | {speedup_str:14s} |")
+        speedup_pl_str = f"**{speedup_pl:.2f}x**" if speedup_pl > 0 else "N/A"
+
+        print(f"| {r['num_qubits']:6d} | {r['depth']:5d} | {mq_str:11s} | {aer_str:10s} | {qiskit_str:6s} | {pennylane_str:28s} | {speedup_str:14s} | {speedup_pl_str:21s} |")
 
 
 if __name__ == "__main__":
