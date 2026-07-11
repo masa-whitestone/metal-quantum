@@ -202,11 +202,18 @@ _DIAG_GATES = frozenset({
 class FusionPlan(NamedTuple):
     """Parameter-independent fusion plan for a circuit structure.
 
-    bounds はフィルタ済みゲート列 (barrier 除去後) 上の区間
-    [start, end) と種別。同じ構造 (ゲート名 + qubit 列) の回路なら
-    パラメータ値が違っても再利用できる。
+    bounds はフィルタ済み・並べ替え済みゲート列 (barrier 除去後、
+    ``order`` を適用した後) 上の区間 [start, end) と種別。同じ構造
+    (ゲート名 + qubit 列) の回路ならパラメータ値が違っても再利用できる。
+
+    order[i] はフィルタ済みゲート列における「並べ替え後 i 番目」の
+    元インデックス。可換なゲート (disjoint qubit、または同一 qubit 上の
+    対角ゲート同士) だけを入れ替えて融合ブロックの充填率を上げるための
+    もので、同一 qubit 上の非可換なゲート間の相対順序は常に保存する
+    (see ``_reorder_for_locality``)。
     """
     bounds: Tuple[Tuple[int, int, str], ...]   # (start, end, kind)
+    order: Tuple[int, ...] = ()                # index permutation (post-barrier-filter)
 
 
 def _gate_fields(gate: Any) -> Tuple[str, List[int], List]:
@@ -336,6 +343,93 @@ def _diag_reaches(items: List, max_fused: int) -> List[int]:
     return jg
 
 
+# 並べ替え探索を諦めて恒等順のまま計画する回路サイズの上限。
+# 各ステップが ready 集合を線形走査するため最悪 O(G^2) になり得るが、
+# make_plan は回路構造ごとに一度だけ呼ばれキャッシュされるので、通常の
+# 回路規模 (数百〜数千ゲート) では無視できるコスト。極端に大きい回路
+# だけ安全側に倒してスキップする。
+_MAX_REORDER_GATES = 8000
+
+
+def _reorder_for_locality(items: List[Tuple[Any, List[int], bool]],
+                          max_fused: int) -> List[int]:
+    """Greedily reorder commuting gates to pack fusion windows tighter.
+
+    元の回路の意味は変えない: 同じ qubit に触れる 2 ゲートの相対順序は
+    必ず保存する (per-qubit の依存 DAG に対するトポロジカル順序)。disjoint
+    な qubit に触れるゲート同士はテンソル積の別軸に作用するので、どちら
+    を先に適用しても最終状態は同一。この自由度だけを使い、segment DP に
+    渡す前に「現在組み立て中のウィンドウ (<= max_fused distinct qubits)」
+    に収まる ready ゲートを貪欲に選ぶ (収まらなければ最もオーバーラップ
+    が大きいものを、それも尽きればウィンドウを閉じて次点を選ぶ)。
+
+    ランダムな回路 (例: benchmarks の create_random_circuit) はゲート順が
+    「全 qubit に 1 発ずつ + ランダムな2qubitゲート」の繰り返しになって
+    おり、元の順序のままだと隣接ブロックの qubit 集合がほぼ独立で
+    (実測 average overlap ~0.34/4)、置換のほぼ全パスが下位ビット非保存
+    の generic gather に落ちる。ゲート順を「依存関係を保ったまま」
+    詰め直すだけで同じ max_fused 予算により多くのゲートを収め、融合
+    ブロック数 (== 置換パス数) を大きく減らせる (実測: n=22 で dense
+    block 98 -> 39, 詳細は cpu_diag.py 参照)。パラメータ値を見ない
+    純粋な構造変換なので FusionPlan と同様に構造キーでキャッシュできる。
+    """
+    G = len(items)
+    if G <= 1 or G > _MAX_REORDER_GATES:
+        return list(range(G))
+
+    last_on_qubit: dict = {}
+    preds: List[List[int]] = [[] for _ in range(G)]
+    succs: List[List[int]] = [[] for _ in range(G)]
+    for i, (_, qubits, _) in enumerate(items):
+        seen = set()
+        for q in qubits:
+            if q in seen:
+                continue
+            seen.add(q)
+            j = last_on_qubit.get(q)
+            if j is not None:
+                succs[j].append(i)
+                preds[i].append(j)
+            last_on_qubit[q] = i
+
+    indeg = [len(p) for p in preds]
+    ready = [i for i in range(G) if indeg[i] == 0]
+    order: List[int] = []
+    union: set = set()
+    while len(order) < G:
+        room = max_fused - len(union)
+        best = -1
+        best_key = None
+        for idx in ready:
+            qubits = items[idx][1]
+            uq = set(qubits)
+            new = len(uq - union)
+            if new <= room:
+                overlap = len(uq & union)
+                key = (-overlap, new, idx)
+                if best_key is None or key < best_key:
+                    best_key = key
+                    best = idx
+        if best < 0:
+            # Nothing left fits the current window: close it and let the
+            # (deterministic) lowest-index ready gate start the next one.
+            union = set()
+            best = min(ready)
+        order.append(best)
+        ready.remove(best)
+        uq = set(items[best][1])
+        union |= uq
+        if len(union) > max_fused:
+            # Oversized single gate (more qubits than max_fused): it gets
+            # its own window, matching _dense_reaches' length-1 handling.
+            union = uq
+        for j in succs[best]:
+            indeg[j] -= 1
+            if indeg[j] == 0:
+                ready.append(j)
+    return order
+
+
 def make_plan(gates: List,
               num_qubits: int,
               max_fused: int = DEFAULT_MAX_FUSED_QUBITS
@@ -365,6 +459,9 @@ def make_plan(gates: List,
     G = len(items)
     if G == 0:
         return FusionPlan(())
+
+    order = _reorder_for_locality(items, max_fused)
+    items = [items[i] for i in order]
 
     jd = _dense_reaches(items, max_fused)
     jg = _diag_reaches(items, max_fused)
@@ -407,7 +504,7 @@ def make_plan(gates: List,
         bounds.append((s, e, kind))
         e = s
     bounds.reverse()
-    return FusionPlan(tuple(bounds))
+    return FusionPlan(tuple(bounds), tuple(order))
 
 
 def build_blocks(gates: List, num_qubits: int, plan: FusionPlan) -> List:
@@ -424,6 +521,8 @@ def build_blocks(gates: List, num_qubits: int, plan: FusionPlan) -> List:
         if name == 'barrier':
             continue
         items.append((get_gate_matrix(name, params), qubits))
+    if plan.order:
+        items = [items[i] for i in plan.order]
     blocks = []
     for s, e, kind in plan.bounds:
         seg = items[s:e]
@@ -616,25 +715,35 @@ def _apply_blocks_transpose(sv: np.ndarray,
 
 
 def _plan_permutation(pos_of: List[int], q_asc: List[int], k: int,
-                      num_qubits: int):
+                      num_qubits: int, next_set: 'set | None' = None):
     """Plan the one-pass permutation that moves ``q_asc`` into bits <k.
 
     ブロック qubit のうち既に下位ビットにいるものは現在位置を維持し、
     新規参入だけ空いた下位スロットへ入れる (移動ビット数の最小化;
     ビット順の食い違いは行列並べ替えで無料吸収)。追い出される qubit
     は空いた上位位置を昇順で埋める。
+
+    どの新規参入 qubit がどの空きスロットに入るかは今回の GEMM の
+    コストには影響しない (行列並べ替えで無料吸収) が、次にどの
+    permutation が来るかには影響する: 次の dense ブロック (``next_set``)
+    にも属す qubit を最も下位の空きスロットへ優先的に割り当てておくと、
+    次回そのビットが動かず「下位からの連続 run」が伸びやすくなり、
+    r>=2/3 の高速ブロックコピー経路 (または perm 自体のスキップ) に
+    つながりやすい。next_set は現在のブロック集合以降で最も近い
+    dense ブロックの qubit 集合 (diag ブロックは下位ビットを要求しない
+    ので読み飛ばす); 呼び出し側が渡さなければ従来の昇順割り当てになる。
     """
     n = num_qubits
     block_set = set(q_asc)
     new_pos = list(pos_of)
     kept_slots = {pos_of[u] for u in q_asc if pos_of[u] < k}
     free_slots = [b for b in range(k) if b not in kept_slots]
-    fi = 0
-    for u in q_asc:
-        if pos_of[u] >= k:
-            new_pos[u] = free_slots[fi]
-            fi += 1
-    vacated = sorted(pos_of[u] for u in q_asc if pos_of[u] >= k)
+    entrants = [u for u in q_asc if pos_of[u] >= k]
+    if next_set:
+        entrants.sort(key=lambda u: (u not in next_set, u))
+    for fi, u in enumerate(entrants):
+        new_pos[u] = free_slots[fi]
+    vacated = sorted(pos_of[u] for u in entrants)
     evictees = sorted(
         (u for u in range(n)
          if pos_of[u] < k and u not in block_set and pos_of[u] not in kept_slots),
@@ -708,7 +817,21 @@ def apply_fused_blocks(sv: np.ndarray,
         # The retired buffer is reusable unless it is the caller's array.
         return np.empty_like(caller) if prev is caller else prev
 
-    for block in blocks:
+    # Lookahead table: next_dense_qubits[bi] = qubit set of the nearest
+    # DenseBlock at index > bi (skipping DiagBlocks, which impose no low-bit
+    # requirement). Used to steer _plan_permutation's free-slot assignment
+    # toward qubits that will be needed low again soon (see its docstring).
+    # 純粋に構造 (ゲート名 + qubit 列) だけから決まるので、パラメータが
+    # 変わっても同じ; O(len(blocks)) の前計算コストは無視できる。
+    n_blocks = len(blocks)
+    next_dense_qubits: List = [None] * n_blocks
+    _running = None
+    for bi in range(n_blocks - 1, -1, -1):
+        next_dense_qubits[bi] = _running
+        if isinstance(blocks[bi], DenseBlock):
+            _running = set(blocks[bi].qubits)
+
+    for bidx, block in enumerate(blocks):
         q = block.qubits if hasattr(block, 'qubits') else block[1]
         k = len(q)
         dim = 1 << k
@@ -738,7 +861,8 @@ def apply_fused_blocks(sv: np.ndarray,
         if hi >= k:
             # Block not in the low bits: one parallel permutation pass
             # moves the block qubits there (already-low qubits stay put).
-            new_pos = _plan_permutation(pos_of, q_asc, k, n)
+            new_pos = _plan_permutation(pos_of, q_asc, k, n,
+                                        next_dense_qubits[bidx])
             if pristine:
                 # |0..0> はビット置換に不変: レイアウト更新のみ。
                 stats.n_perm_skipped += 1
