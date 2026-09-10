@@ -37,12 +37,25 @@ Measurements with 8192 shots:
 | 22     | 273ms   | 511ms      | **1.9x** |
 | 24     | 974ms   | 1540ms     | **1.6x** |
 
-## CPU vs Aer
+## CPU Backend
 
-For smaller systems where GPU overhead dominates, Metal-Q includes an optimized CPU backend with Numba:
+The CPU backend fuses consecutive gates into ≤4-qubit blocks and applies each
+block as one Accelerate GEMM (AMX), with a lazily-restored bit-permutation
+layout, single-pass diagonal blocks, commutation-aware gate reordering, a
+structure-keyed fusion-plan cache, an optional complex64 statevector and
+adjoint-method gradients. Gains measured on an Apple M3 Pro, one optimization
+step at a time (each row relative to the previous row's code):
 
-| Qubits | Metal-Q CPU | Qiskit Aer | Comparison |
-|--------|-------------|------------|------------|
-| 10     | 3ms         | 1ms        | Aer faster |
-| 14     | 3ms         | 4ms        | **1.31x faster** |
-| 16     | 13ms        | 12ms       | Comparable |
+| Optimization | Workload | Gain |
+|---|---|---|
+| Gate fusion + Accelerate GEMM (vs per-gate Numba kernels) | VQE ansatz statevector | 2.3x (12q), 1.9x (16q), 1.6x (18q); QFT 1.2–1.4x |
+| complex64 sgemm path, DiagBlock fusion, direct Pauli reduction | VQE objective (energy) | 3.0x (20q), 3.8x (24q) complex64; 2.1x / 2.6x complex128; QAOA 24q up to 4.7x |
+| JIT block builder + structure-keyed plan cache | VQE objective, complex64 | 12q 7.2 → 4.3 ms, 16q 11.2 → 8.0 ms |
+| Commutation-aware gate reordering | Random circuit statevector, 22q complex128 | 586 → 221 ms; 1.6–2.1x faster than Qiskit Aer at 18–22 qubits |
+| Adjoint differentiation as the default CPU gradient | Gradient of a p-parameter circuit | ~3 circuit applications instead of 2p |
+
+Reproduce with `benchmarks/cpu_vs_aer_benchmark.py` (random circuits vs Qiskit
+Aer and PennyLane `lightning.qubit`) and `benchmarks/cpu_vqe_benchmark.py`
+(statevector / expectation / gradient / fused energy+gradient of a VQE
+objective).
+

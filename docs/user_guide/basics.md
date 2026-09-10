@@ -61,7 +61,7 @@ Statevector (first 4 elements): [0.70710677+0.j 0.        +0.j 0.        +0.j 0.
 
 ### CPU Backend
 
-Metal-Q also provides a high-performance CPU backend optimized with Numba and Polars.
+Metal-Q also provides a high-performance CPU backend: consecutive gates are fused into ≤4-qubit blocks and applied as Accelerate GEMMs (AMX), diagonal gate runs become a single phase pass, and gradients use the adjoint method. `CPUBackend(dtype=np.complex64)` selects a single-precision statevector (expectation values are still reduced in float64).
 
 ```python
 # Run on CPU
