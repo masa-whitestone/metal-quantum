@@ -40,6 +40,17 @@ try:
 except ImportError:
     HAS_NUMBA = False
 
+# 任意依存: あれば分割 GEMM の間だけ BLAS のスレッド数を 1 に落とす
+# (下の _matmul_rows_threaded 参照)。コントローラはインポート時に
+# 一度だけ作る: 生成時のライブラリ走査が ~100us かかるのに対し、
+# 使い回した limit() は ~3us で済む (毎回 threadpool_limits() を
+# 呼ぶと 98us かかり、ホットパスには乗せられない)。
+try:
+    from threadpoolctl import ThreadpoolController as _ThreadpoolController
+    _TP_CONTROLLER = _ThreadpoolController()
+except Exception:       # not installed, or it cannot inspect this BLAS
+    _TP_CONTROLLER = None
+
 # 融合ブロックの最大 qubit 数。2^k x 2^k の GEMM になる。
 # 大きいほどメモリパスは減るが、振幅あたりの FLOP は 2^k で増える。
 DEFAULT_MAX_FUSED_QUBITS = 4
@@ -129,12 +140,27 @@ def _matmul_rows_threaded(a: np.ndarray, b: np.ndarray, out: np.ndarray):
         ntask = min((rows + _TARGET_CHUNK_ROWS - 1) // _TARGET_CHUNK_ROWS,
                     256)
     chunk = (rows + ntask - 1) // ntask
-    futures = [
-        _pool().submit(np.matmul, a[s:s + chunk], b, out=out[s:s + chunk])
-        for s in range(0, rows, chunk)
-    ]
-    for f in futures:
-        f.result()
+
+    def _run():
+        futures = [
+            _pool().submit(np.matmul, a[s:s + chunk], b, out=out[s:s + chunk])
+            for s in range(0, rows, chunk)
+        ]
+        for f in futures:
+            f.result()
+
+    if _TP_CONTROLLER is None:
+        _run()
+        return
+    # 自分で行チャンクを並列化しているので、BLAS 側のスレッドは 1 に
+    # する。Accelerate (macOS) は自前で調停するため実質無害だが、
+    # OpenBLAS (Linux) は既定でコア数分のスレッドを立ててこの
+    # ThreadPool と取り合い、実測で桁違いに遅くなる
+    # (環境変数 OPENBLAS_NUM_THREADS=1 と同じ効果を、その設定を
+    # 忘れた利用者にも与える)。limit() 自体は ~3us で、この分岐に
+    # 来る GEMM は必ずミリ秒級。
+    with _TP_CONTROLLER.limit(limits=1, user_api='blas'):
+        _run()
 
 
 # ============================================================================

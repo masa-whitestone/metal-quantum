@@ -1,0 +1,43 @@
+2026-09-10 15:18:06,721 - SECURITY - Suspicious path pattern detected: ../etc/passwd
+2026-09-10 15:18:06,721 - SECURITY - Suspicious path pattern detected: ../../etc/shadow
+2026-09-10 15:18:06,721 - SECURITY - Suspicious path pattern detected: docs/../../etc/passwd
+2026-09-10 15:18:06,721 - SECURITY - Suspicious path pattern detected: ../../../root/.ssh/id_rsa
+2026-09-10 15:18:06,721 - SECURITY - Suspicious path pattern detected: docs/../../../etc/passwd
+2026-09-10 15:18:06,723 - SECURITY - Suspicious path pattern detected: /etc/passwd
+2026-09-10 15:18:06,723 - SECURITY - Suspicious path pattern detected: /root/.ssh/id_rsa
+2026-09-10 15:18:06,723 - SECURITY - Suspicious path pattern detected: /var/log/syslog
+2026-09-10 15:18:06,723 - SECURITY - Suspicious path pattern detected: C:\Windows\System32\config\sam
+2026-09-10 15:18:06,723 - SECURITY - Suspicious path pattern detected: \\server\share\file
+2026-09-10 15:18:06,724 - SECURITY - Suspicious path pattern detected: ~/.ssh/id_rsa
+2026-09-10 15:18:06,724 - SECURITY - Suspicious path pattern detected: ~/Documents/secrets.txt
+2026-09-10 15:18:06,724 - SECURITY - Suspicious path pattern detected: ~root/.bashrc
+2026-09-10 15:18:06,725 - SECURITY - Suspicious path pattern detected: ${HOME}/.ssh/id_rsa
+2026-09-10 15:18:06,725 - SECURITY - Suspicious path pattern detected: %USERPROFILE%\Documents\passwords.txt
+2026-09-10 15:18:06,725 - SECURITY - Suspicious path pattern detected: $(pwd)/secret
+2026-09-10 15:18:06,726 - SECURITY - Dangerous URL scheme blocked: file:///etc/passwd
+2026-09-10 15:18:06,727 - SECURITY - Dangerous URL scheme blocked: javascript:alert('xss')
+2026-09-10 15:18:06,727 - SECURITY - Dangerous URL scheme blocked: data:text/html,<script>alert('xss')</script>
+2026-09-10 15:18:06,727 - SECURITY - Dangerous URL scheme blocked: vbscript:msgbox('xss')
+2026-09-10 15:18:06,727 - SECURITY - Dangerous URL scheme blocked: ftp://evil.com/malware
+2026-09-10 15:18:06,728 - SECURITY - Validating MkDocs configuration: /tmp/pytest-of-root/pytest-8/test_valid_configuration0/mkdocs.yml
+2026-09-10 15:18:06,731 - SECURITY - Validating MkDocs configuration: /tmp/pytest-of-root/pytest-8/test_path_traversal_in_nav_blo0/mkdocs.yml
+2026-09-10 15:18:06,732 - SECURITY - Suspicious path pattern detected: ../../etc/passwd
+2026-09-10 15:18:06,732 - SECURITY - Validation error: Unsafe navigation path: ../../etc/passwd
+2026-09-10 15:18:06,733 - SECURITY - Validating MkDocs configuration: /tmp/pytest-of-root/pytest-8/test_dangerous_plugins_blocked0/mkdocs.yml
+2026-09-10 15:18:06,734 - SECURITY - Validation warning: Unknown plugin: unknown_plugin
+2026-09-10 15:18:06,735 - SECURITY - Validating MkDocs configuration: /tmp/pytest-of-root/pytest-8/test_dangerous_theme_paths_blo0/mkdocs.yml
+2026-09-10 15:18:06,735 - SECURITY - Suspicious path pattern detected: /etc/custom_theme
+2026-09-10 15:18:06,735 - SECURITY - Validation error: Unsafe theme directory: /etc/custom_theme
+2026-09-10 15:18:06,737 - SECURITY - Validating MkDocs configuration: /tmp/pytest-of-root/pytest-8/test_dangerous_markdown_extens0/mkdocs.yml
+2026-09-10 15:18:06,737 - SECURITY - Validation error: Dangerous markdown extension: markdown_include
+2026-09-10 15:18:06,739 - SECURITY - Validating MkDocs configuration: /tmp/pytest-of-root/pytest-8/test_file_url_blocked0/mkdocs.yml
+2026-09-10 15:18:06,739 - SECURITY - Dangerous URL scheme blocked: file:///etc/passwd
+2026-09-10 15:18:06,739 - SECURITY - Validation error: Unsafe URL in repo_url: file:///etc/passwd
+2026-09-10 15:18:06,741 - SECURITY - Sandbox prepared successfully
+2026-09-10 15:18:06,742 - SECURITY - Sandbox cleaned up: /tmp/test_sandbox_er4fmej9
+2026-09-10 15:18:06,744 - SECURITY - Sandbox prepared successfully
+2026-09-10 15:18:06,744 - SECURITY - Sandbox cleaned up: /tmp/test_sandbox_ximsnmep
+2026-09-10 15:18:06,746 - SECURITY - File access violation: read on /tmp/pytest-of-root/pytest-8/outside.txt (outside /tmp/pytest-of-root/pytest-8/test_blocked_access0)
+2026-09-10 15:18:06,747 - SECURITY - File access violation: read on /tmp/pytest-of-root/pytest-8/outside.txt (outside /tmp/pytest-of-root/pytest-8/test_access_logging0)
+2026-09-10 15:18:06,749 - SECURITY - File access violation: write on /tmp/pytest-of-root/pytest-8/blocked.txt (outside /tmp/pytest-of-root/pytest-8/test_report_export0)
+2026-09-10 15:18:06,749 - SECURITY - Access report exported to /tmp/pytest-of-root/pytest-8/test_report_export0/report.json
