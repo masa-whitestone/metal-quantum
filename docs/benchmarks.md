@@ -54,6 +54,48 @@ step at a time (each row relative to the previous row's code):
 | Commutation-aware gate reordering | Random circuit statevector, 22q complex128 | 586 → 221 ms; 1.6–2.1x faster than Qiskit Aer at 18–22 qubits |
 | Adjoint differentiation as the default CPU gradient | Gradient of a p-parameter circuit | ~3 circuit applications instead of 2p |
 
+### Blocked adjoint sweep and one-pass Hamiltonian reduction
+
+The latest round targets the two calls a VQE/QAOA optimizer spends most of its
+time in. `expectation` now reduces **all** Hamiltonian terms in one statevector
+pass (terms grouped by X/Y mask; Z-only terms need no gather). The adjoint
+gradient evaluates each derivative at ψ_j via the small matrix `dU·U†`,
+batches the reversed gate list into ≤3-qubit blocks (commuting gates repacked
+with the same dependency-preserving reordering used by fusion) and runs
+**one Numba kernel per block** that contracts the derivatives and unwinds ψ
+and λ together, directly on fusion's permuted layout; diagonal/permutation
+gates take a one-multiply path. λ = H_eff ψ and the energy come from a single
+write pass, so `CPUBackend.expectation_and_gradient` runs one forward pass
+instead of two. At 20 qubits (177 gates, 120 parameters, 39 terms) a gradient
+now launches 30 kernels and 118 statevector-sized passes instead of 512 and
+1063.
+
+The same change unifies the gradient contract across backends (one entry per
+`circuit.parameters`), which fixes `QuantumLayer` on the CPU backend for
+circuits that reuse parameters or use expressions such as `rz(2*gamma)`
+(previously an `IndexError`), and fixes the parameter-shift fallback for such
+expressions (previously returned 0).
+
+Measured on this branch's CI-like environment — a 4-core x86-64 Linux
+container with OpenBLAS (`OPENBLAS_NUM_THREADS=1`), no Accelerate/AMX — with
+`benchmarks/cpu_vqe_benchmark.py`'s workload (3-layer RY/RZ + CX-chain ansatz,
+2n−1-term Ising Hamiltonian), min of 6 runs, before → after:
+
+| dtype | Qubits | statevector | expectation | gradient (adjoint) | expectation_and_gradient |
+|---|---|---|---|---|---|
+| complex128 | 12 | 1.1 → 1.0 ms | 1.4 → 1.2 ms (**1.17x**) | 4.1 → 3.7 ms (**1.11x**) | 5.3 → 3.7 ms (**1.43x**) |
+| complex128 | 16 | 6.3 → 6.0 ms | 7.9 → 7.1 ms (**1.11x**) | 26.4 → 23.0 ms (**1.15x**) | 39.5 → 23.3 ms (**1.70x**) |
+| complex128 | 18 | 22.9 → 23.0 ms | 32.2 → 33.3 ms (**0.97x**) | 115.8 → 91.4 ms (**1.27x**) | 160.6 → 86.4 ms (**1.86x**) |
+| complex128 | 20 | 68.8 → 67.9 ms | 99.3 → 91.2 ms (**1.09x**) | 500.4 → 343.6 ms (**1.46x**) | 595.7 → 324.3 ms (**1.84x**) |
+| complex64 | 12 | 0.9 → 0.9 ms | 1.4 → 1.1 ms (**1.27x**) | 3.8 → 3.9 ms (**0.97x**) | 5.1 → 3.3 ms (**1.55x**) |
+| complex64 | 16 | 3.5 → 3.3 ms | 5.5 → 4.3 ms (**1.28x**) | 25.4 → 20.7 ms (**1.23x**) | 29.1 → 20.4 ms (**1.43x**) |
+| complex64 | 18 | 11.5 → 10.8 ms | 18.9 → 15.7 ms (**1.20x**) | 99.1 → 72.8 ms (**1.36x**) | 116.7 → 72.8 ms (**1.60x**) |
+| complex64 | 20 | 38.5 → 40.0 ms | 80.1 → 65.0 ms (**1.23x**) | 421.5 → 320.0 ms (**1.32x**) | 504.2 → 310.9 ms (**1.62x**) |
+
+Apple Silicon numbers for this round are pending; there the reverse sweep is
+DRAM-bound rather than instruction-bound, so the 9x reduction in passes is
+expected to matter more (see `docs/ROADMAP.md`).
+
 Reproduce with `benchmarks/cpu_vs_aer_benchmark.py` (random circuits vs Qiskit
 Aer and PennyLane `lightning.qubit`) and `benchmarks/cpu_vqe_benchmark.py`
 (statevector / expectation / gradient / fused energy+gradient of a VQE
