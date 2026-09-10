@@ -4,12 +4,87 @@ metalq/backends/base.py - Abstract Backend Base Class
 すべてのバックエンドが実装すべきインターフェースを定義。
 """
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Sequence, Union, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
     from ..circuit import Circuit
     from ..spin import Hamiltonian
+
+
+def gate_slot_grads_to_parameter_grads(circuit: 'Circuit',
+                                       slot_grads: Sequence[float]
+                                       ) -> np.ndarray:
+    """Chain-rule per-gate-parameter-slot gradients onto circuit parameters.
+
+    Backends whose kernels differentiate every *gate parameter slot*
+    (one entry per entry of ``gate.params``, in gate order, constants
+    included) use this to produce the array the Backend gradient
+    contract asks for: one entry per unique circuit parameter, in
+    ``circuit.parameters`` order.
+
+    A slot holding a bare ``Parameter`` contributes its gradient to that
+    parameter; a slot holding a ``ParameterExpression`` contributes
+    ``expr.grad(p)`` times the slot gradient to each parameter ``p`` it
+    involves (so ``rz(2*gamma)`` contributes 2x, and a parameter reused
+    by several gates accumulates every gate's share); a slot holding a
+    plain number is consumed and ignored.
+
+    Args:
+        circuit: The *unbound* parameterized circuit the gradients were
+            computed for.
+        slot_grads: dE/d(gate parameter slot), length
+            ``sum(len(g.params) for g in circuit.gates)``.
+
+    Returns:
+        np.ndarray of shape (len(circuit.parameters),).
+
+    Raises:
+        ValueError: if ``slot_grads`` does not have one entry per gate
+            parameter slot.
+        NotImplementedError: if a slot holds a non-linear expression
+            (``a * b``), which has no parameter-independent chain-rule
+            coefficient. Adjoint differentiation refuses these circuits
+            for the same reason, so neither path can differentiate them;
+            failing loudly beats returning a wrong gradient.
+    """
+    from ..parameter import Parameter, ParameterExpression
+
+    gates = circuit.gates
+    expected = sum(len(g.params) for g in gates)
+    flat = np.asarray(slot_grads, dtype=float).ravel()
+    if flat.size != expected:
+        raise ValueError(
+            f"expected {expected} gate-parameter-slot gradients "
+            f"(sum of len(gate.params)), got {flat.size}")
+
+    plist = circuit.parameters
+    index = {p: i for i, p in enumerate(plist)}
+    out = np.zeros(len(plist))
+    ptr = 0
+    for gate in gates:
+        for p in gate.params:
+            g = flat[ptr]
+            ptr += 1
+            if isinstance(p, Parameter):
+                idx = index.get(p)
+                if idx is not None:
+                    out[idx] += g
+            elif isinstance(p, ParameterExpression):
+                for q in p.parameters:
+                    idx = index.get(q)
+                    if idx is None:
+                        continue
+                    try:
+                        scale = p.grad(q)
+                    except NotImplementedError as exc:
+                        raise NotImplementedError(
+                            f"cannot differentiate gate parameter '{p}' "
+                            f"with respect to '{q}': {exc}") from exc
+                    if scale:
+                        out[idx] += g * scale
+            # plain float slot: consumed, contributes to no parameter
+    return out
 
 
 class Backend(ABC):
@@ -107,7 +182,21 @@ class Backend(ABC):
                     - 'adjoint': GPU向け高速アルゴリズム
         
         Returns:
-            Gradient array of shape (num_params,)
+            Gradient array of shape ``(len(circuit.parameters),)``.
+
+        Contract (all backends, all methods):
+            One entry per **unique circuit parameter**, ordered by
+            ``circuit.parameters`` (first appearance) -- the same order
+            ``params`` and ``circuit.bind_parameters(params)`` use, so
+            ``gradient()[i]`` is dE/d(params[i]).
+
+            This is NOT the per-gate-parameter-slot layout some kernels
+            produce natively: a parameter driving several gates gets the
+            summed contribution, an expression slot like ``rz(2*gamma)``
+            is chain-ruled through ``ParameterExpression.grad``, and
+            constant-valued gate parameters contribute nothing. Backends
+            whose kernels return per-slot values must map them with
+            ``gate_slot_grads_to_parameter_grads`` before returning.
         """
         pass
 
@@ -129,7 +218,8 @@ class Backend(ABC):
 
         Returns:
             (energy, gradient) tuple: energy is a float, gradient is an
-            np.ndarray of shape (num_params,)
+            np.ndarray of shape ``(len(circuit.parameters),)`` following
+            the same contract as ``gradient()``.
         """
         energy = self.expectation(circuit, hamiltonian, params)
         grad = self.gradient(circuit, hamiltonian, params)

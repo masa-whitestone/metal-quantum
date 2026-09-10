@@ -731,6 +731,9 @@ class MPSBackend(Backend):
                 return parameter_shift_gradient(self, circuit, hamiltonian, params)
 
         # Native Adjoint Differentiation
+        # The slot -> parameter mapping needs the UNBOUND circuit (the bound
+        # copy has plain floats where the Parameters were).
+        source_circuit = circuit
         if params is not None:
             circuit = circuit.bind_parameters(params)
 
@@ -773,32 +776,15 @@ class MPSBackend(Backend):
             logger.error(f"Gradient computation failed: {e}")
             raise
             
-        # 4. Filter/Map Gradients
-        # Map flat gradients back to input parameter structure.
-        # We walk through gates and consume gradients from the flat buffer.
-        
-        final_grads = []
-        grad_ptr = 0
-        
-        for gate in circuit.gates:
-            num_params_gate = len(gate.params)
-            
-            if num_params_gate > 0:
-                # Extract gradients for this gate
-                # For v1 standard gates (RX, RY, RZ), usually 1 param.
-                # If multi-param gate (e.g. U3), we extract all.
-                
-                # Check if this gate corresponds to trainable parameters in the input list.
-                # Simplification: We assume the input `params` list strictly corresponds 
-                # to the sequence of parameters encountered in circuit traversal.
-                # (i.e., we return ALL computed gradients).
-                
-                for k in range(num_params_gate):
-                    final_grads.append(grads_out[grad_ptr + k])
-                
-            grad_ptr += num_params_gate
-
-        return np.array(final_grads)
+        # 4. Map per-gate-parameter-slot gradients onto circuit parameters.
+        # The native kernel fills one slot per entry of gate.params (in gate
+        # order, constants included); Backend.gradient's contract is one
+        # entry per unique circuit parameter, so chain-rule them through
+        # the shared helper (expressions like rz(2*gamma) scale by 2, a
+        # parameter reused by several gates accumulates, constants drop).
+        from ..base import gate_slot_grads_to_parameter_grads
+        return gate_slot_grads_to_parameter_grads(
+            source_circuit, np.array(list(grads_out), dtype=np.float64))
 
     def expectation_and_gradient(self, circuit: 'Circuit', hamiltonian: 'Hamiltonian',
                                   params: List[float]) -> Tuple[float, np.ndarray]:
@@ -831,6 +817,7 @@ class MPSBackend(Backend):
             return energy, grad
 
         # Native fused Adjoint Differentiation + Energy
+        source_circuit = circuit
         if params is not None:
             circuit = circuit.bind_parameters(params)
 
@@ -872,15 +859,8 @@ class MPSBackend(Backend):
             logger.error(f"Fused expectation+gradient computation failed: {e}")
             raise
 
-        # 4. Filter/Map Gradients (same mapping as gradient())
-        final_grads = []
-        grad_ptr = 0
-
-        for gate in circuit.gates:
-            num_params_gate = len(gate.params)
-            if num_params_gate > 0:
-                for k in range(num_params_gate):
-                    final_grads.append(grads_out[grad_ptr + k])
-            grad_ptr += num_params_gate
-
-        return float(energy_out.value), np.array(final_grads)
+        # 4. Map slot gradients onto circuit parameters (same as gradient())
+        from ..base import gate_slot_grads_to_parameter_grads
+        grads = gate_slot_grads_to_parameter_grads(
+            source_circuit, np.array(list(grads_out), dtype=np.float64))
+        return float(energy_out.value), grads
