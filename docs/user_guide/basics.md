@@ -78,7 +78,22 @@ Counts (CPU): {'11': 491, '00': 509}
 
 ## Qiskit Interoperability
 
-Metal-Q provides seamless adapters to convert Qiskit circuits, allowing you to run existing Qiskit code on Apple Silicon GPUs.
+Metal-Q provides adapters to convert supported Qiskit circuits for simulation.
+
+`to_metalq` supports the standard gates `h`, `x`, `y`, `z`, `s`, `sdg`, `t`,
+`tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `cx`, `cz`, `cp`, and `swap`,
+plus barriers and terminal measurements. It preserves global bit indices across
+registers, the classical bit count, and each measurement's destination. Backend
+sampling and counts formatting are separate from this conversion; preserving the
+measurement map does not add classical-register formatting to backend counts.
+
+Shared Qiskit parameters, including `ParameterVector` elements, remain shared in
+Metal-Q. Bind general expressions such as `2 * theta` in Qiskit using
+`assign_parameters` before conversion. The adapter raises `ValidationError` for
+unsupported operations, classical conditions, quantum gates after a measurement,
+and nonzero or symbolic global phase. It does not silently skip instructions,
+decompose gates, or modify the input circuit. Instruction errors identify the
+operation, its zero-based position, and its global qubit indices.
 
 ```python
 from qiskit import QuantumCircuit
