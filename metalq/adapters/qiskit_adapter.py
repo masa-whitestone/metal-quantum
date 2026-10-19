@@ -125,75 +125,95 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
     return mq_circuit
 
 def to_qiskit(mq_circuit: Circuit) -> Any:
-    """
-    Convert a Metal-Q Circuit to a Qiskit QuantumCircuit.
-    
+    """Export a Metal-Q Circuit without silently dropping gates or symbols.
+
+    Supported gates are h, x, y, z, s, sdg, t, tdg, sx, sxdg, rx, ry,
+    rz, p, cx, cz, cp and swap, plus barriers. Classical bit counts are
+    preserved, and measurements are appended after all gates, matching
+    Metal-Q's separate gate and measurement lists.
+
+    Repeated Metal-Q Parameters map to one Qiskit Parameter per identity.
+    Distinct parameters with the same name are rejected because Qiskit
+    requires unique parameter names within a circuit. Bind them or give them
+    unique names before exporting. Bind general ParameterExpressions using
+    Circuit.bind_parameters before exporting. The input is never modified.
+
     Args:
         mq_circuit: Metal-Q Circuit object.
-        
+
     Returns:
-        Qiskit QuantumCircuit object.
+        Qiskit QuantumCircuit with the supported gates and measurement map.
+
+    Raises:
+        ValidationError: A gate is unsupported or has an invalid shape, a
+            parameter value cannot be exported, or distinct parameters share
+            a name. Instruction indices in error messages are zero-based.
+        ImportError: Qiskit is not installed.
     """
     try:
         from qiskit import QuantumCircuit
-    except ImportError:
-        raise ImportError("Qiskit is not installed. Please install 'qiskit' to use this feature.")
-        
-    qc = QuantumCircuit(mq_circuit.num_qubits)
-    
-    for gate in mq_circuit.gates:
+        from qiskit.circuit import Parameter as QiskitParameter
+    except ImportError as exc:
+        raise ImportError(
+            "Qiskit is not installed. Install 'qiskit' to use this feature."
+        ) from exc
+
+    from ..exceptions import ValidationError
+    from ..parameter import ParameterExpression
+
+    # (qubit count, parameter count); barriers take any number of qubits.
+    supported = {
+        'h': (1, 0), 'x': (1, 0), 'y': (1, 0), 'z': (1, 0),
+        's': (1, 0), 'sdg': (1, 0), 't': (1, 0), 'tdg': (1, 0),
+        'sx': (1, 0), 'sxdg': (1, 0), 'rx': (1, 1), 'ry': (1, 1),
+        'rz': (1, 1), 'p': (1, 1), 'cx': (2, 0), 'cz': (2, 0),
+        'cp': (2, 1), 'swap': (2, 0), 'barrier': (None, 0),
+    }
+    qc = QuantumCircuit(mq_circuit.num_qubits, mq_circuit.num_clbits)
+    parameter_map = {}
+    parameter_names = set()
+
+    for index, gate in enumerate(mq_circuit.gates):
         name = gate.name.lower()
-        qubits = gate.qubits
-        params = gate.params
-        
-        # Resolve parameters if they are floats, keep Expressions/Parameters if possible?
-        # Qiskit supports parameters. We should map MetalQ Parameter -> Qiskit Parameter?
-        # For simplicity in V1, we assume values or simple mapping if needed.
-        # But Qiskit Parameter objects are distinct.
-        # If params contain MetalQ Parameters, we should probably convert them to Qiskit Parameters.
-        # This requires maintaining a map of name -> QiskitParameter.
-        
-        # Simple mapping for now (Values only or simple casting)
-        # TODO: Full Parameter mapping
-        
-        q_params = []
-        for p in params:
-             if hasattr(p, 'name'):
-                 from qiskit.circuit import Parameter as QParameter
-                 # Note: This creates a NEW parameter with same name.
-                 # If reused, Qiskit treats them as same.
-                 q_params.append(QParameter(p.name))
-             else:
-                 q_params.append(float(p))
-        
-        if name == 'h':
-            qc.h(qubits[0])
-        elif name == 'x':
-            qc.x(qubits[0])
-        elif name == 'y':
-            qc.y(qubits[0])
-        elif name == 'z':
-            qc.z(qubits[0])
-        elif name == 'rx':
-            qc.rx(q_params[0], qubits[0])
-        elif name == 'ry':
-            qc.ry(q_params[0], qubits[0])
-        elif name == 'rz':
-            qc.rz(q_params[0], qubits[0])
-        elif name == 'cx':
-            qc.cx(qubits[0], qubits[1])
-        elif name == 'cz':
-            qc.cz(qubits[0], qubits[1])
-        elif name == 'swap':
-            qc.swap(qubits[0], qubits[1])
-        elif name == 'barrier':
-            qc.barrier(qubits)
-        else:
-            # Fallback or warning
-            print(f"Warning: Gate {name} not directly mapped to Qiskit. Skipping.")
-            
-    # Measurements? Metal-Q stores measurements separately
-    for q_idx, c_idx in mq_circuit.measurements:
-        qc.measure(q_idx, c_idx)
-        
+        context = f"'{name}' at instruction {index} on qubits {gate.qubits}"
+        if name not in supported:
+            raise ValidationError(f"Unsupported gate {context}.")
+        num_qubits, num_params = supported[name]
+        if ((num_qubits is not None and len(gate.qubits) != num_qubits)
+                or len(gate.params) != num_params):
+            raise ValidationError(f"Invalid gate shape for {context}.")
+
+        params = []
+        for value in gate.params:
+            if isinstance(value, Parameter):
+                if value not in parameter_map:
+                    if value.name in parameter_names:
+                        raise ValidationError(
+                            f"Distinct parameters have the same name "
+                            f"'{value.name}' in {context}. Bind them or give "
+                            "them unique names before exporting."
+                        )
+                    parameter_map[value] = QiskitParameter(value.name)
+                    parameter_names.add(value.name)
+                params.append(parameter_map[value])
+            elif isinstance(value, ParameterExpression):
+                raise ValidationError(
+                    f"Unsupported parameter expression in {context}. Bind "
+                    "expressions with Circuit.bind_parameters before "
+                    "exporting."
+                )
+            else:
+                try:
+                    params.append(float(value))
+                except (TypeError, ValueError) as exc:
+                    raise ValidationError(
+                        f"Unsupported parameter in {context}. Expected a "
+                        "numeric value or Metal-Q Parameter."
+                    ) from exc
+
+        getattr(qc, name)(*params, *gate.qubits)
+
+    for qubit, clbit in mq_circuit.measurements:
+        qc.measure(qubit, clbit)
+
     return qc
