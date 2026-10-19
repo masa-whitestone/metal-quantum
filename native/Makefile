@@ -44,5 +44,6 @@ $(METALLIB): $(SRC_DIR)/quantum_gates.metal $(SRC_DIR)/adjoint.metal
 
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f $(PYLIB_DIR)/libmetalq.dylib $(PYLIB_DIR)/default.metallib
 
 .PHONY: all clean pylib

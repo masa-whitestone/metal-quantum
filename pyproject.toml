@@ -42,6 +42,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    "PyYAML>=6.0",
 ]
 performance = [
     "numba>=0.56.0",
