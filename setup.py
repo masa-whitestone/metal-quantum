@@ -1,58 +1,34 @@
-#!/usr/bin/env python3
-"""
-Setup script for Metal-Q.
-Handles building native libraries during installation.
-"""
+"""Build the native Metal libraries before packaging on macOS."""
 
 import subprocess
 import sys
 from pathlib import Path
-from setuptools import setup
-from setuptools.command.build_py import build_py
-from setuptools.command.develop import develop
+
+from setuptools import Command, setup
+from setuptools.command.build import build
 
 
-def build_native():
-    """Build native Metal libraries."""
-    if sys.platform != 'darwin':
-        print("Warning: Metal-Q only supports macOS. Skipping native build.")
-        return False
-    
-    try:
-        subprocess.run(['xcrun', '--version'], check=True, capture_output=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Error: Xcode Command Line Tools required.")
-        print("Install with: xcode-select --install")
-        return False
-    
-    root = Path(__file__).parent
-    print("Building Metal-Q native libraries...")
-    
-    try:
-        subprocess.run(['make', 'clean'], cwd=root, capture_output=True)
-        subprocess.run(['make', 'install'], cwd=root, check=True)
-        print("Native libraries built successfully!")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Build failed: {e}")
-        return False
+class BuildNative(Command):
+    description = "build the Metal library and shaders"
+    user_options = []
 
+    def initialize_options(self):
+        pass
 
-class BuildPy(build_py):
+    def finalize_options(self):
+        pass
+
     def run(self):
-        build_native()
-        super().run()
+        subprocess.run(["make", "install"], cwd=Path(__file__).parent, check=True)
 
 
-class Develop(develop):
-    def run(self):
-        build_native()
-        super().run()
+class Build(build):
+    # Editable wheels also run these subcommands, but setuptools can suppress
+    # errors from a customized build_py in editable mode.
+    sub_commands = [
+        ("build_native", lambda cmd: sys.platform == "darwin"),
+        *build.sub_commands,
+    ]
 
 
-setup(
-    cmdclass={
-        'build_py': BuildPy,
-        'develop': Develop,
-    },
-)
+setup(cmdclass={"build": Build, "build_native": BuildNative})

@@ -67,4 +67,4 @@ Circuit.bind_parameters() → Backend.run()/statevector()/expectation()
 - **macOS 12.0+ with Apple Silicon only** (M1-M4)
 - Statevector simulation is memory-exponential; practical limit ~30 qubits
 - No noise models (ideal simulation only)
-- Requires Xcode Command Line Tools for native build
+- Requires Xcode with Metal compiler tools for native builds on macOS

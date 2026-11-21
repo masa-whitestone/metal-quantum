@@ -36,7 +36,10 @@ For development or to get the latest features, you can install from source:
     ```
 
 Run these commands from the repository root with your intended Python
-environment activated. `make` (or `make install`) builds the native library and
+environment activated. On macOS, pip also runs the incremental native build
+when installing in editable mode or building a wheel from source. You can
+skip the separate compilation step when installing with pip. A failed native
+build stops installation. `make` (or `make install`) builds the native library and
 shaders in `native/build/` and copies them to `metalq/lib/`. It does not install
 the Python package; use the pip command above for that step.
 
@@ -74,6 +77,7 @@ placeholder below with that identifier; its value depends on your Xcode version:
 
 ```bash
 TOOLCHAINS="identifier-from-toolchainIdentifier" make
+TOOLCHAINS="identifier-from-toolchainIdentifier" python -m pip install -e .
 ```
 
 Use the same variable with `make test` if needed. This selects the toolchain for

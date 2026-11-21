@@ -32,7 +32,7 @@ $(TARGET_LIB): $(OBJS)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(LDFLAGS) -o $@ $^
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.m
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.m $(wildcard $(INC_DIR)/*.h $(SRC_DIR)/*.h)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(INC_DIR) -c $< -o $@
 

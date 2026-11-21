@@ -11,14 +11,15 @@ cd metal-quantum
 ```
 
 2. Activate your Python environment (Conda or venv), then install development
-dependencies into that environment. The `dev` extra includes pytest and PyYAML
+dependencies into that environment. On macOS, check the
+[Metal compiler tools](docs/installation.md#metal-compiler-tools) first:
+the editable install builds the native library. The `dev` extra includes pytest and PyYAML
 for the documentation security tests:
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-3. Check the [Metal compiler tools](docs/installation.md#metal-compiler-tools),
-then build from the repository root:
+3. To rebuild after editing native sources, run this from the repository root:
 ```bash
 make
 ```
@@ -49,7 +50,7 @@ python -m pytest tests/test_backend_cpu.py -v
 ```
 
 If you selected a Metal toolchain with `TOOLCHAINS`, use the same environment
-variable for `make`, `make install`, and `make test`.
+variable for pip source installs, wheel builds, and the Makefile targets.
 
 ## Code Style
 
