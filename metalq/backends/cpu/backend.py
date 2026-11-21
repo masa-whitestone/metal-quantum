@@ -27,7 +27,7 @@ class CPUBackend(Backend):
     def __init__(self,
                  fusion: bool = True,
                  max_fused_qubits: int = 4,
-                 dtype=np.complex128):
+                 dtype: Union[type, np.dtype] = np.complex128) -> None:
         """Initialize CPU backend.
 
         Args:
