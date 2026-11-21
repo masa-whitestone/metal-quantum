@@ -72,6 +72,18 @@ GATE_MAP = {
 # Any parameterized gate outside this set forces a parameter-shift fallback.
 ADJOINT_DIFFERENTIABLE = frozenset({'rx', 'ry', 'rz', 'p', 'u1', 'cp'})
 
+
+def _marshal_sx(name, qubit):
+    # SX = H S H and S† = S Z. Neither fixed gate adds native parameters.
+    gates = ('h', 's', 'h') if name == 'sx' else ('h', 's', 'z', 'h')
+    for gate in gates:
+        native = MQGate()
+        native.type = GATE_MAP[gate]
+        native.num_qubits = 1
+        native.qubits[0] = qubit
+        yield native
+
+
 class MPSBackend(Backend):
     """
     GPU-accelerated backend using Apple Metal Performance Shaders.
@@ -401,6 +413,9 @@ class MPSBackend(Backend):
             # parameters, so dropping them does not disturb gradient bookkeeping.
             if gname in ('id', 'i', 'barrier'):
                 continue
+            if gname in ('sx', 'sxdg'):
+                marshaled.extend(_marshal_sx(gname, gate.qubits[0]))
+                continue
 
             gt = MQGate()
 
@@ -446,15 +461,6 @@ class MPSBackend(Backend):
                 gt.type = GATE_MAP['p']
                 gt.num_params = 1
                 gt.params[0] = -np.pi / 4
-            elif gname == 'sx':
-                # sx == RX(pi/2) up to a global phase (accepted, matches sxdg).
-                gt.type = GATE_MAP['rx']
-                gt.num_params = 1
-                gt.params[0] = np.pi / 2
-            elif gname == 'sxdg':
-                gt.type = GATE_MAP['rx']
-                gt.num_params = 1
-                gt.params[0] = -np.pi / 2
 
             else:
                 # Fail closed: never fall through to a silent identity.
@@ -557,8 +563,7 @@ class MPSBackend(Backend):
                 f"Circuit requires {memory_required / 1024**3:.1f}GB, exceeding memory limit"
             )
 
-        # Calculate appropriate timeout (num_gates is the marshaled count, which
-        # may be smaller than len(circuit.gates) after dropping no-op gates).
+        # Use the native count after dropping no-ops and expanding fixed gates.
         num_gates = len(c_gates)
         timeout = self._calculate_timeout(num_qubits, num_gates)
 

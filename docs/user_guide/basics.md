@@ -86,9 +86,7 @@ plus barriers and measurements. After a measurement, gates can still act on
 unmeasured qubits. Standard `delay` instructions are skipped in ideal simulation.
 The adapter encodes numeric global phases, including those introduced by
 Qiskit's transpiler, with an `rz` and a `p` gate. It omits the pair for phases
-within `1e-15` radians of a multiple of 2π. For comparisons of complex
-amplitudes on circuits containing `sx` or `sxdg`, use the CPU backend. The MPS
-backend implements these gates as X rotations that differ by a global phase.
+within `1e-15` radians of a multiple of 2π.
 
 The adapter preserves global bit indices across registers, the classical bit
 count, and each measurement's destination. A circuit imported with zero

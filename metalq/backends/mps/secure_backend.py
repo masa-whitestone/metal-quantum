@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass
 
 from ..base import Backend
-from .backend import MQComplex, MQGate, MQHamiltonian, GATE_MAP
+from .backend import MQComplex, MQGate, MQHamiltonian, GATE_MAP, _marshal_sx
 from .native_wrapper import create_secure_native_wrapper, NativeCallWrapper
 from ...exceptions import (
     ValidationError,
@@ -170,11 +170,14 @@ class SecureMPSBackend(Backend):
         Returns:
             Array of MQGate structures
         """
-        c_gates = (MQGate * len(circuit.gates))()
+        marshaled = []
 
         for i, gate in enumerate(circuit.gates):
-            gt = c_gates[i]
             gname = gate.name.lower()
+            if gname in ('sx', 'sxdg'):
+                marshaled.extend(_marshal_sx(gname, gate.qubits[0]))
+                continue
+            gt = MQGate()
 
             # Map gate name to type ID
             if gname in GATE_MAP:
@@ -200,14 +203,6 @@ class SecureMPSBackend(Backend):
                 gt.type = GATE_MAP['p']
                 gt.num_params = 1
                 gt.params[0] = -np.pi/4
-            elif gname == 'sx':
-                gt.type = GATE_MAP['rx']
-                gt.num_params = 1
-                gt.params[0] = np.pi/2
-            elif gname == 'sxdg':
-                gt.type = GATE_MAP['rx']
-                gt.num_params = 1
-                gt.params[0] = -np.pi/2
             else:
                 # Unknown gate - log and skip
                 logger.warning(f"Unsupported gate '{gname}' at position {i}")
@@ -219,7 +214,9 @@ class SecureMPSBackend(Backend):
                 if j < 3:  # C struct has fixed array of 3
                     gt.qubits[j] = q
 
-        return c_gates
+            marshaled.append(gt)
+
+        return (MQGate * len(marshaled))(*marshaled)
 
     def run(
         self,
@@ -286,7 +283,7 @@ class SecureMPSBackend(Backend):
         sv_ptr = statevector.ctypes.data_as(ctypes.POINTER(MQComplex))
 
         # Calculate appropriate timeout
-        num_gates = len(circuit.gates)
+        num_gates = len(c_gates)
         timeout = self._calculate_timeout(num_qubits, num_gates)
 
         logger.info(
@@ -394,7 +391,7 @@ class SecureMPSBackend(Backend):
         grads_out = (ctypes.c_double * total_param_count)()
 
         # Calculate timeout
-        timeout = self._calculate_timeout(circuit.num_qubits, len(circuit.gates)) * 2
+        timeout = self._calculate_timeout(circuit.num_qubits, len(c_gates)) * 2
 
         logger.info(f"Computing gradient with timeout={timeout}s")
 
@@ -404,7 +401,7 @@ class SecureMPSBackend(Backend):
                 self._ctx,
                 circuit.num_qubits,
                 c_gates,
-                len(circuit.gates),
+                len(c_gates),
                 hamiltonian_struct,
                 grads_out,
                 timeout=timeout
