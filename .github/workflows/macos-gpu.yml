@@ -1,0 +1,119 @@
+name: macOS GPU tests
+
+# Builds the native Metal library on an Apple Silicon runner and runs the
+# GPU (MPS backend) tests, which skip themselves silently when no Metal
+# device is available. The "Check Metal device" step fails the job instead.
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'native/**'
+      - 'metalq/backends/mps/**'
+      - 'metalq/adapters/**'
+      - 'setup.py'
+      - 'Makefile'
+      - '.github/workflows/macos-gpu.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gpu:
+    name: GPU tests (Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Report hardware and toolchain
+        run: |
+          sw_vers
+          uname -m
+          system_profiler SPDisplaysDataType || true
+          xcodebuild -version
+          if ! xcrun -sdk macosx metal --version; then
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun -sdk macosx metal --version
+          fi
+
+      - name: Build native library
+        run: make -j3
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install numpy numba qiskit torch pytest pyyaml threadpoolctl
+
+      - name: Check Metal device
+        run: |
+          python - <<'PY'
+          from metalq.backends.mps.backend import MPSBackend
+          backend = MPSBackend()
+          assert backend.is_available(), "No usable Metal device on this runner"
+          print("MPS backend available")
+          PY
+
+      - name: GPU and adapter tests
+        run: |
+          python -m pytest -rs -p no:cacheprovider \
+            tests/test_gpu_correctness.py tests/test_backend_mps.py \
+            tests/test_qiskit_adapter.py tests/test_qiskit_export.py \
+            tests/test_native_packaging.py
+
+      - name: Global-phase checks (MPS vs CPU vs Qiskit)
+        run: |
+          python - <<'PY'
+          import numpy as np
+          from metalq import Circuit
+          from metalq.adapters.qiskit_adapter import to_metalq
+          from metalq.backends.cpu.backend import CPUBackend
+          from metalq.backends.mps.backend import MPSBackend
+          from qiskit import transpile
+          from qiskit.circuit.random import random_circuit
+          from qiskit.quantum_info import Statevector
+
+          cpu, mps = CPUBackend(), MPSBackend()
+          rng = np.random.default_rng(0)
+          fixed = ["h", "x", "y", "z", "s", "sdg", "t", "tdg", "sx", "sxdg"]
+          rotations = ["rx", "ry", "rz", "p"]
+          worst = 0.0
+          for _ in range(30):
+              c = Circuit(5)
+              for _ in range(60):
+                  r = rng.random()
+                  if r < 0.5:
+                      getattr(c, fixed[rng.integers(len(fixed))])(int(rng.integers(5)))
+                  elif r < 0.8:
+                      getattr(c, rotations[rng.integers(4)])(
+                          float(rng.uniform(-3, 3)), int(rng.integers(5)))
+                  else:
+                      a, b = rng.permutation(5)[:2]
+                      c.cx(int(a), int(b))
+              worst = max(worst, np.abs(mps.statevector(c) - cpu.statevector(c)).max())
+          print(f"MPS vs CPU including global phase (30 circuits with sx/sxdg): max |diff| = {worst:.2e}")
+          assert worst < 1e-4
+
+          worst = 0.0
+          for seed in range(20):
+              qc = random_circuit(4, 6, seed=seed)
+              t = transpile(qc, basis_gates=["rz", "sx", "x", "cx"],
+                            optimization_level=1, seed_transpiler=seed)
+              sv = mps.statevector(to_metalq(t))
+              worst = max(worst, np.abs(sv - Statevector.from_instruction(t).data).max())
+          print(f"Qiskit transpile -> to_metalq -> MPS vs Qiskit (20 circuits): max |diff| = {worst:.2e}")
+          assert worst < 1e-4
+          PY
+
+      - name: Full test suite (informational)
+        continue-on-error: true
+        run: python -m pytest -q --tb=no -rfs -p no:cacheprovider tests/
