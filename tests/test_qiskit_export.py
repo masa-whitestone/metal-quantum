@@ -37,6 +37,14 @@ def assert_state_matches(cpu, original, exported):
         ("p", [0.49], [1]), ("cx", [], [2, 0]),
         ("cz", [], [2, 0]), ("cp", [-0.61], [2, 0]),
         ("swap", [], [2, 0]),
+        ("id", [], [0]), ("u", [0.31, -0.42, 0.59], [2]),
+        ("r", [0.61, -0.78], [2]), ("cy", [], [2, 0]),
+        ("ch", [], [2, 0]), ("iswap", [], [0, 2]),
+        ("crx", [0.42], [2, 0]), ("cry", [-0.59], [2, 0]),
+        ("crz", [0.91], [2, 0]), ("rxx", [-0.84], [2, 0]),
+        ("ryy", [0.76], [2, 0]), ("rzx", [-0.35], [2, 0]),
+        ("rzz", [0.68], [2, 0]), ("ccx", [], [2, 0, 1]),
+        ("ccz", [], [2, 0, 1]), ("cswap", [], [2, 0, 1]),
     ],
 )
 def test_supported_gates_match_original(cpu, name, params, wires):
@@ -72,8 +80,13 @@ def test_mixed_circuits_match_original(cpu, seed):
 
 
 @pytest.mark.parametrize("num_clbits", [0, 1, 3, 5])
-def test_classical_bit_count_preserved(num_clbits):
-    assert to_qiskit(Circuit(2, num_clbits)).num_clbits == num_clbits
+def test_unitary_export_has_no_idle_classical_register(num_clbits):
+    exported = to_qiskit(Circuit(2, num_clbits).x(0).cx(0, 1))
+    assert exported.num_clbits == 0
+    assert exported.to_gate().num_qubits == 2
+    assert exported.control().num_qubits == 3
+    exported.measure_all()
+    assert [reg.size for reg in exported.cregs] == [2]
 
 
 @pytest.mark.parametrize(
@@ -170,17 +183,11 @@ def test_bound_expression_matches_original(cpu):
     assert_state_matches(cpu, bound, to_qiskit(bound))
 
 
-@pytest.mark.parametrize("kind", ["cy", "u", "ccx", "id", "custom"])
+@pytest.mark.parametrize("kind", ["cs", "custom"])
 def test_unsupported_gate_rejected_with_context(kind):
     original = Circuit(3).x(0)
-    if kind == "cy":
-        original.cy(0, 1)
-    elif kind == "u":
-        original.u(0.1, 0.2, 0.3, 0)
-    elif kind == "ccx":
-        original.ccx(0, 1, 2)
-    elif kind == "id":
-        original.id(0)
+    if kind == "cs":
+        original.cs(0, 1)
     else:
         original._add_gate("custom", [2])
     with pytest.raises(ValidationError) as error:
@@ -215,7 +222,7 @@ def test_input_is_unchanged_on_success_or_failure(unsupported):
     theta = Parameter("theta")
     original = Circuit(2, 3).rx(theta, 1).rz(theta, 0).measure(1, 2)
     if unsupported:
-        original.cy(0, 1)
+        original.cs(0, 1)
     gates = [(g.name, list(g.qubits), list(g.params)) for g in original.gates]
     measurements = list(original.measurements)
     if unsupported:

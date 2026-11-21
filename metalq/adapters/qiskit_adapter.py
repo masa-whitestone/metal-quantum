@@ -1,6 +1,7 @@
 
 from typing import Any
 from ..circuit import Circuit
+from ..exceptions import ValidationError
 from ..parameter import Parameter
 
 def to_metalq(qc_qiskit: Any) -> Circuit:
@@ -127,10 +128,9 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
 def to_qiskit(mq_circuit: Circuit) -> Any:
     """Export a Metal-Q Circuit without silently dropping gates or symbols.
 
-    Supported gates are h, x, y, z, s, sdg, t, tdg, sx, sxdg, rx, ry,
-    rz, p, cx, cz, cp and swap, plus barriers. Classical bit counts are
-    preserved, and measurements are appended after all gates, matching
-    Metal-Q's separate gate and measurement lists.
+    Measurement-free circuits export with zero classical bits so that Qiskit
+    can use them as gates. For measured circuits, the full classical register
+    is preserved and measurements are appended after all gates.
 
     Repeated Metal-Q Parameters map to one Qiskit Parameter per identity.
     Distinct parameters with the same name are rejected because Qiskit
@@ -158,7 +158,6 @@ def to_qiskit(mq_circuit: Circuit) -> Any:
             "Qiskit is not installed. Install 'qiskit' to use this feature."
         ) from exc
 
-    from ..exceptions import ValidationError
     from ..parameter import ParameterExpression
 
     # (qubit count, parameter count); barriers take any number of qubits.
@@ -167,9 +166,15 @@ def to_qiskit(mq_circuit: Circuit) -> Any:
         's': (1, 0), 'sdg': (1, 0), 't': (1, 0), 'tdg': (1, 0),
         'sx': (1, 0), 'sxdg': (1, 0), 'rx': (1, 1), 'ry': (1, 1),
         'rz': (1, 1), 'p': (1, 1), 'cx': (2, 0), 'cz': (2, 0),
-        'cp': (2, 1), 'swap': (2, 0), 'barrier': (None, 0),
+        'cp': (2, 1), 'swap': (2, 0), 'id': (1, 0), 'u': (1, 3),
+        'r': (1, 2), 'cy': (2, 0), 'ch': (2, 0), 'iswap': (2, 0),
+        'crx': (2, 1), 'cry': (2, 1), 'crz': (2, 1), 'rxx': (2, 1),
+        'ryy': (2, 1), 'rzx': (2, 1), 'rzz': (2, 1), 'ccx': (3, 0),
+        'ccz': (3, 0), 'cswap': (3, 0), 'barrier': (None, 0),
     }
-    qc = QuantumCircuit(mq_circuit.num_qubits, mq_circuit.num_clbits)
+    measurements = mq_circuit.measurements
+    num_clbits = mq_circuit.num_clbits if measurements else 0
+    qc = QuantumCircuit(mq_circuit.num_qubits, num_clbits)
     parameter_map = {}
     parameter_names = set()
 
@@ -213,7 +218,7 @@ def to_qiskit(mq_circuit: Circuit) -> Any:
 
         getattr(qc, name)(*params, *gate.qubits)
 
-    for qubit, clbit in mq_circuit.measurements:
+    for qubit, clbit in measurements:
         qc.measure(qubit, clbit)
 
     return qc

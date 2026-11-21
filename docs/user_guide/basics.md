@@ -139,14 +139,24 @@ q_1: ─────┤ X ├┤ Rz(0.5) ├
 
 ### Exporting Metal-Q circuits
 
-`to_qiskit` exports `h`, `x`, `y`, `z`, `s`, `sdg`, `t`, `tdg`, `sx`,
-`sxdg`, `rx`, `ry`, `rz`, `p`, `cx`, `cz`, `cp`, and `swap`, plus barriers.
-It preserves the classical bit count and measurement destinations, including
-unused classical bits. Measurements are appended after all gates because
-Metal-Q stores gates and measurements in separate lists.
+`to_qiskit` supports barriers and the following standard gates:
 
-Shared Metal-Q parameters remain shared in Qiskit. Distinct parameters with the
-same name raise `ValidationError`: bind them or use unique names before export.
+- Single-qubit gates: `id`, `h`, `x`, `y`, `z`, `s`, `sdg`, `t`, `tdg`,
+  `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `r`, and `u`.
+- Two-qubit gates: `cx`, `cy`, `cz`, `ch`, `cp`, `crx`, `cry`, `crz`, `swap`,
+  `iswap`, `rxx`, `ryy`, `rzx`, and `rzz`.
+- Three-qubit gates: `ccx`, `ccz`, and `cswap`.
+
+Circuits without measurements export with zero classical bits, so they can
+be used with Qiskit's `to_gate()` and `control()`. For measured circuits,
+the full classical width and all measurement destinations are preserved.
+Measurements follow the gates in their original measurement order.
+
+Shared Metal-Q parameters remain shared in Qiskit. After a round trip,
+`ParameterVector` elements are ordinary Qiskit parameters. Bind the exported
+parameters by name or object because positional binding sorts names such as
+`v[10]` before `v[2]`. Distinct parameters with the same name raise
+`ValidationError`. Bind them or use unique names before export.
 General parameter expressions must first be bound with `Circuit.bind_parameters`.
 Unsupported gates also raise `ValidationError`, identifying the operation, its
 zero-based gate index, and its qubits. They are never silently omitted. Export
