@@ -30,7 +30,7 @@ def assert_state_matches(cpu, converted, reference):
 @pytest.mark.parametrize(
     "name,params,wires",
     [
-        ("h", [], [1]), ("x", [], [1]), ("y", [], [1]),
+        ("id", [], [1]), ("h", [], [1]), ("x", [], [1]), ("y", [], [1]),
         ("z", [], [1]), ("s", [], [1]), ("sdg", [], [1]),
         ("t", [], [1]), ("tdg", [], [1]), ("sx", [], [1]),
         ("sxdg", [], [1]), ("rx", [0.37], [1]),
@@ -59,6 +59,17 @@ def test_bell_state(cpu):
     qc.h(0)
     qc.cx(0, 1)
     assert_state_matches(cpu, to_metalq(qc), qc)
+
+
+def test_transpiled_bell_state_including_global_phase(cpu):
+    bell = QuantumCircuit(2)
+    bell.h(0)
+    bell.cx(0, 1)
+    compiled = qiskit.transpile(
+        bell, basis_gates=["rz", "sx", "x", "cx"], optimization_level=1,
+    )
+    assert compiled.global_phase != 0
+    assert_state_matches(cpu, to_metalq(compiled), compiled)
 
 
 @pytest.mark.parametrize("seed", range(5))
@@ -205,7 +216,7 @@ def test_expression_bound_in_qiskit_is_supported(cpu):
 
 
 @pytest.mark.parametrize(
-    "kind", ["cry", "reset", "delay", "custom", "if_else", "open_cx"],
+    "kind", ["cry", "reset", "custom", "if_else", "open_cx"],
 )
 def test_unsupported_operations_rejected_with_context(kind):
     qc = QuantumCircuit(2, 1)
@@ -214,8 +225,6 @@ def test_unsupported_operations_rejected_with_context(kind):
         qc.cry(np.pi / 3, 0, 1)
     elif kind == "reset":
         qc.reset(0)
-    elif kind == "delay":
-        qc.delay(10, 0, unit="dt")
     elif kind == "custom":
         qc.append(Gate("custom", 1, []), [0])
     elif kind == "if_else":
@@ -227,14 +236,15 @@ def test_unsupported_operations_rejected_with_context(kind):
         to_metalq(qc)
 
 
-def test_custom_gate_cannot_impersonate_supported_name():
+@pytest.mark.parametrize("name", ["x", "delay", "id"])
+def test_custom_gate_cannot_impersonate_supported_name(name):
     qc = QuantumCircuit(1)
-    custom = Gate("x", 1, [])
+    custom = Gate(name, 1, [])
     definition = QuantumCircuit(1)
     definition.h(0)
     custom.definition = definition
     qc.append(custom, [0])
-    with pytest.raises(ValidationError, match="Unsupported.*'x'"):
+    with pytest.raises(ValidationError, match=f"Unsupported.*'{name}'"):
         to_metalq(qc)
 
 
@@ -247,21 +257,55 @@ def test_classically_conditioned_standard_gate_rejected():
         to_metalq(qc)
 
 
-@pytest.mark.parametrize("same_qubit", [True, False])
-def test_gate_after_measurement_rejected(same_qubit):
+@pytest.mark.parametrize("name,wires", [("x", [0]), ("cx", [0, 1]), ("cx", [1, 0])])
+def test_gate_on_measured_qubit_rejected(name, wires):
     qc = QuantumCircuit(2, 1)
     qc.measure(0, 0)
     qc.barrier()
-    qc.x(0 if same_qubit else 1)
+    getattr(qc, name)(*wires)
     with pytest.raises(ValidationError, match="terminal measurements"):
         to_metalq(qc)
 
 
-@pytest.mark.parametrize("phase", [0.3, np.pi, Parameter("phase")])
-def test_nonzero_or_symbolic_global_phase_rejected(phase):
+def test_independent_gates_and_delays_after_measurement(cpu):
+    qc = QuantumCircuit(2, 2, global_phase=0.4)
+    qc.h(0)
+    qc.delay(10, 0, unit="dt")
+    qc.measure(0, 1)
+    qc.delay(20, 0, unit="ns")
+    qc.h(1)
+    qc.measure(1, 0)
+    converted = to_metalq(qc)
+    assert converted.measurements == [(0, 1), (1, 0)]
+    assert "delay" not in [gate.name for gate in converted.gates]
+    reference = QuantumCircuit(2, global_phase=0.4)
+    reference.h([0, 1])
+    assert_state_matches(cpu, converted, reference)
+
+
+@pytest.mark.parametrize("phase", [0.3, -0.7, np.pi])
+def test_numeric_global_phase_preserved(cpu, phase):
+    qc = QuantumCircuit(2, global_phase=phase)
+    qc.h(0)
+    qc.cx(0, 1)
+    assert_state_matches(cpu, to_metalq(qc), qc)
+
+
+@pytest.mark.parametrize("phase", [0, 2 * np.pi, -1e-17, 1e-17])
+def test_trivial_global_phase_adds_no_gates(cpu, phase):
     qc = QuantumCircuit(1, global_phase=phase)
+    converted = to_metalq(qc)
+    assert converted.gates == []
+    assert_state_matches(cpu, converted, qc)
+
+
+def test_symbolic_global_phase_requires_binding(cpu):
+    phase = Parameter("phase")
+    qc = QuantumCircuit(1, global_phase=2 * phase)
     with pytest.raises(ValidationError, match="global phase"):
         to_metalq(qc)
+    bound = qc.assign_parameters({phase: 0.3})
+    assert_state_matches(cpu, to_metalq(bound), bound)
 
 
 @pytest.mark.parametrize("unsupported", [False, True])

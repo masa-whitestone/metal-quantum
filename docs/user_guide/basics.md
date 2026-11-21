@@ -80,20 +80,29 @@ Counts (CPU): {'11': 491, '00': 509}
 
 Metal-Q provides adapters to convert supported Qiskit circuits for simulation.
 
-`to_metalq` supports the standard gates `h`, `x`, `y`, `z`, `s`, `sdg`, `t`,
+`to_metalq` supports the standard gates `id`, `h`, `x`, `y`, `z`, `s`, `sdg`, `t`,
 `tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `cx`, `cz`, `cp`, and `swap`,
-plus barriers and terminal measurements. It preserves global bit indices across
-registers, the classical bit count, and each measurement's destination. Backend
-sampling and counts formatting are separate from this conversion; preserving the
-measurement map does not add classical-register formatting to backend counts.
+plus barriers and measurements. After a measurement, gates can still act on
+unmeasured qubits. Standard `delay` instructions are skipped in ideal simulation.
+The adapter encodes numeric global phases, including those introduced by
+Qiskit's transpiler, with an `rz` and a `p` gate. It omits the pair for phases
+within `1e-15` radians of a multiple of 2π. For comparisons of complex
+amplitudes on circuits containing `sx` or `sxdg`, use the CPU backend. The MPS
+backend implements these gates as X rotations that differ by a global phase.
+
+The adapter preserves global bit indices across registers, the classical bit
+count, and each measurement's destination. A circuit imported with zero
+classical bits has no destinations for a subsequent Metal-Q `measure_all()`.
+Backend sampling and counts formatting are separate from this conversion.
 
 Shared Qiskit parameters, including `ParameterVector` elements, remain shared in
 Metal-Q. Bind general expressions such as `2 * theta` in Qiskit using
-`assign_parameters` before conversion. The adapter raises `ValidationError` for
-unsupported operations, classical conditions, quantum gates after a measurement,
-and nonzero or symbolic global phase. It does not silently skip instructions,
-decompose gates, or modify the input circuit. Instruction errors identify the
-operation, its zero-based position, and its global qubit indices.
+`assign_parameters` before conversion. Bind symbolic global phases the same way.
+Unsupported parameters now raise `metalq.exceptions.ValidationError`. Update
+handlers that previously caught `ValueError` to catch this exception. The adapter
+also raises it for unsupported operations, classical conditions, and gates that
+touch a previously measured qubit. Instruction errors identify the operation,
+its zero-based position, and its global qubit indices.
 
 ```python
 from qiskit import QuantumCircuit

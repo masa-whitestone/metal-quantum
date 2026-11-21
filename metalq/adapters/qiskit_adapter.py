@@ -1,5 +1,6 @@
 """Conversion between Qiskit and Metal-Q circuits."""
 
+import math
 from typing import Any
 
 from ..circuit import Circuit
@@ -10,9 +11,11 @@ from ..parameter import Parameter
 def to_metalq(qc_qiskit: Any) -> Circuit:
     """Convert a Qiskit QuantumCircuit without silently changing its meaning.
 
-    Supported standard gates are h, x, y, z, s, sdg, t, tdg, sx, sxdg,
-    rx, ry, rz, p, cx, cz, cp and swap. Barriers and terminal measurements
-    are supported, including circuits with multiple registers or loose bits.
+    Supported standard gates are id, h, x, y, z, s, sdg, t, tdg, sx, sxdg,
+    rx, ry, rz, p, cx, cz, cp and swap. Numeric global phases are encoded
+    using rz and p. Delays are ignored in ideal simulation. Barriers and
+    measurements terminal on their qubits are supported across registers and
+    loose bits.
     Classical bit counts and measurement destinations are preserved. This
     does not change the backend's counts formatting or sampling behavior.
 
@@ -28,12 +31,12 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
 
     Raises:
         ValidationError: The circuit contains an unsupported operation,
-            classical condition, gate after a measurement, unbound parameter
-            expression, or nonzero/symbolic global phase. Instruction indices
+            classical condition, gate on a previously measured qubit, unbound
+            parameter expression, or unbound global phase. Instruction indices
             in error messages are zero-based.
         ImportError: Qiskit is not installed.
     """
-    from qiskit.circuit import Barrier, Measure
+    from qiskit.circuit import Barrier, Delay, Measure
     from qiskit.circuit import Parameter as QiskitParameter
     from qiskit.circuit import library
 
@@ -47,19 +50,24 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
         'ry': library.RYGate, 'rz': library.RZGate, 'p': library.PhaseGate,
         'cx': library.CXGate, 'cz': library.CZGate,
         'cp': library.CPhaseGate, 'swap': library.SwapGate,
-        'barrier': Barrier, 'measure': Measure,
+        'id': library.IGate, 'barrier': Barrier, 'measure': Measure,
+        'delay': Delay,
     }
 
     phase = qc_qiskit.global_phase
-    if getattr(phase, 'parameters', ()) or float(phase) != 0.0:
+    if getattr(phase, 'parameters', ()):
         raise ValidationError(
-            "Cannot convert a nonzero or symbolic global phase: "
-            "Metal-Q Circuit has no global phase representation."
+            "Bind the symbolic global phase in Qiskit before converting."
         )
 
     mq_circuit = Circuit(qc_qiskit.num_qubits, qc_qiskit.num_clbits)
+    phase = math.remainder(float(phase), math.tau)
+    if abs(phase) > 1e-15:
+        # P(2φ) RZ(-2φ) = exp(iφ) I on either basis state.
+        mq_circuit.rz(-2 * phase, 0)
+        mq_circuit.p(2 * phase, 0)
     parameter_map = {}
-    seen_measurement = False
+    measured_qubits = set()
 
     for index, item in enumerate(qc_qiskit.data):
         operation = item.operation
@@ -74,10 +82,17 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
         if (name not in supported_types
                 or operation.base_class is not supported_types[name]):
             raise ValidationError(f"Unsupported operation {context}.")
-        if seen_measurement and name not in ('measure', 'barrier'):
+        if name == 'delay':
+            continue
+        if name == 'measure':
+            clbit = qc_qiskit.find_bit(item.clbits[0]).index
+            mq_circuit.measure(qubits[0], clbit)
+            measured_qubits.add(qubits[0])
+            continue
+        if name != 'barrier' and not measured_qubits.isdisjoint(qubits):
             raise ValidationError(
                 f"Cannot convert {context}: only terminal measurements "
-                "are supported (no gates may follow a measurement)."
+                "are supported (gate acts on a previously measured qubit)."
             )
 
         params = []
@@ -99,12 +114,7 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
                 except (TypeError, ValueError) as exc:
                     raise ValidationError(message) from exc
 
-        if name == 'measure':
-            clbit = qc_qiskit.find_bit(item.clbits[0]).index
-            mq_circuit.measure(qubits[0], clbit)
-            seen_measurement = True
-        else:
-            getattr(mq_circuit, name)(*params, *qubits)
+        getattr(mq_circuit, name)(*params, *qubits)
 
     return mq_circuit
 
