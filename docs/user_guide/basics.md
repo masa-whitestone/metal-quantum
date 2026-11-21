@@ -78,7 +78,29 @@ Counts (CPU): {'11': 491, '00': 509}
 
 ## Qiskit Interoperability
 
-Metal-Q provides seamless adapters to convert Qiskit circuits, allowing you to run existing Qiskit code on Apple Silicon GPUs.
+Metal-Q provides adapters to convert supported Qiskit circuits for simulation.
+
+`to_metalq` supports the standard gates `id`, `h`, `x`, `y`, `z`, `s`, `sdg`, `t`,
+`tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `cx`, `cz`, `cp`, and `swap`,
+plus barriers and measurements. After a measurement, gates can still act on
+unmeasured qubits. Standard `delay` instructions are skipped in ideal simulation.
+The adapter encodes numeric global phases, including those introduced by
+Qiskit's transpiler, with an `rz` and a `p` gate. It omits the pair for phases
+within `1e-15` radians of a multiple of 2π.
+
+The adapter preserves global bit indices across registers, the classical bit
+count, and each measurement's destination. A circuit imported with zero
+classical bits has no destinations for a subsequent Metal-Q `measure_all()`.
+Backend sampling and counts formatting are separate from this conversion.
+
+Shared Qiskit parameters, including `ParameterVector` elements, remain shared in
+Metal-Q. Bind general expressions such as `2 * theta` in Qiskit using
+`assign_parameters` before conversion. Bind symbolic global phases the same way.
+Unsupported parameters now raise `metalq.exceptions.ValidationError`. Update
+handlers that previously caught `ValueError` to catch this exception. The adapter
+also raises it for unsupported operations, classical conditions, and gates that
+touch a previously measured qubit. Instruction errors identify the operation,
+its zero-based position, and its global qubit indices.
 
 ```python
 from qiskit import QuantumCircuit

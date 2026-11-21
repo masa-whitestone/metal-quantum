@@ -1,128 +1,123 @@
+"""Conversion between Qiskit and Metal-Q circuits."""
 
+import math
 from typing import Any
+
 from ..circuit import Circuit
+from ..exceptions import ValidationError
 from ..parameter import Parameter
 
+
 def to_metalq(qc_qiskit: Any) -> Circuit:
-    """
-    Convert a Qiskit QuantumCircuit to a Metal-Q Circuit.
-    
+    """Convert a Qiskit QuantumCircuit without silently changing its meaning.
+
+    Supported standard gates are id, h, x, y, z, s, sdg, t, tdg, sx, sxdg,
+    rx, ry, rz, p, cx, cz, cp and swap. Numeric global phases are encoded
+    using rz and p. Delays are ignored in ideal simulation. Barriers and
+    measurements terminal on their qubits are supported across registers and
+    loose bits.
+    Classical bit counts and measurement destinations are preserved. This
+    does not change the backend's counts formatting or sampling behavior.
+
+    Repeated Qiskit Parameters (including ParameterVector elements) map to
+    the same Metal-Q Parameter. Bind general ParameterExpressions in Qiskit
+    before conversion. The input circuit is never modified or transpiled.
+
     Args:
         qc_qiskit: Qiskit QuantumCircuit object.
-        
+
     Returns:
-        Metal-Q Circuit object.
+        Metal-Q Circuit with the same supported gates and measurement map.
+
+    Raises:
+        ValidationError: The circuit contains an unsupported operation,
+            classical condition, gate on a previously measured qubit, unbound
+            parameter expression, or unbound global phase. Instruction indices
+            in error messages are zero-based.
+        ImportError: Qiskit is not installed.
     """
-    # Try to import qiskit to check type (optional, dynamic typing is fine)
-    # We assume 'qc_qiskit' behaves like a QuantumCircuit (has .data or iterates instructions)
-    
-    num_qubits = qc_qiskit.num_qubits
-    mq_circuit = Circuit(num_qubits)
-    
-    # Iterate over instructions
-    # Qiskit 1.0+ uses .data which yields (instruction, qargs, cargs)
-    for instruction, qargs, cargs in qc_qiskit.data:
-        name = instruction.name
-        
-        # Map indices
-        # qargs uses Qubit objects, we need indices.
-        # Assuming simple QuantumRegister(n)
-        qubit_indices = [q._index for q in qargs]
-        
-        # Params
-        params = instruction.params
-        
-        # Convert params to float or MetalQ Parameter
-        mq_params = []
-        for p in params:
-            try:
-                # If valid number
-                mq_params.append(float(p))
-            except (TypeError, ValueError):
-                # If ParameterExpression
-                # Metal-Q basic support: use name
-                if hasattr(p, 'name'):
-                    mq_params.append(Parameter(p.name))
-                else:
-                    raise ValueError(f"Unsupported parameter type: {type(p)}")
+    from qiskit.circuit import Barrier, Delay, Measure
+    from qiskit.circuit import Parameter as QiskitParameter
+    from qiskit.circuit import library
 
-        # Helper to apply gate
-        # Helper to apply gate
-        if name == 'h':
-            mq_circuit.h(qubit_indices[0])
-        elif name == 'x':
-            mq_circuit.x(qubit_indices[0])
-        elif name == 'y':
-            mq_circuit.y(qubit_indices[0])
-        elif name == 'z':
-            mq_circuit.z(qubit_indices[0])
-        elif name == 's':
-            mq_circuit.s(qubit_indices[0])
-        elif name == 'sdg':
-            mq_circuit.sdg(qubit_indices[0])
-        elif name == 't':
-            mq_circuit.t(qubit_indices[0])
-        elif name == 'tdg':
-            mq_circuit.tdg(qubit_indices[0])
-        elif name == 'sx':
-            mq_circuit.sx(qubit_indices[0])
-        elif name == 'sxdg':
-            mq_circuit.sxdg(qubit_indices[0])
-        elif name == 'rx':
-            mq_circuit.rx(mq_params[0], qubit_indices[0])
-        elif name == 'ry':
-            mq_circuit.ry(mq_params[0], qubit_indices[0])
-        elif name == 'rz':
-            mq_circuit.rz(mq_params[0], qubit_indices[0])
-        elif name == 'p':
-            mq_circuit.p(mq_params[0], qubit_indices[0])
-        elif name == 'cx':
-            mq_circuit.cx(qubit_indices[0], qubit_indices[1])
-        elif name == 'cz': 
-            mq_circuit.cz(qubit_indices[0], qubit_indices[1])
-        elif name == 'cp':
-            mq_circuit.cp(mq_params[0], qubit_indices[0], qubit_indices[1])
-        elif name == 'swap':
-            mq_circuit.swap(qubit_indices[0], qubit_indices[1])
-        elif name == 'barrier':
-            # Add barrier for visualization
-            mq_circuit.barrier(*qubit_indices)
-        elif name == 'measure':
-            # Handle measurement
-            # Try to get clbit index
-            try:
-                # Qiskit 0.44+
-                cl_indices = []
-                for c in cargs:
-                    try:
-                        idx = qc_qiskit.find_bit(c).index
-                        cl_indices.append(idx)
-                    except AttributeError:
-                        # Fallback for older Qiskit versions or constructed bits
-                        if hasattr(c, 'index'):
-                             cl_indices.append(c.index)
-                        elif hasattr(c, '_index'):
-                             cl_indices.append(c._index)
-                        else:
-                             # Last resort: simplistic assumption if Register is standard
-                             # This might fail for complex register layouts
-                             cl_indices.append(0) 
+    # Names alone are insufficient: a custom gate named "x" may implement H.
+    # base_class also handles Qiskit's singleton standard gates.
+    supported_types = {
+        'h': library.HGate, 'x': library.XGate, 'y': library.YGate,
+        'z': library.ZGate, 's': library.SGate, 'sdg': library.SdgGate,
+        't': library.TGate, 'tdg': library.TdgGate, 'sx': library.SXGate,
+        'sxdg': library.SXdgGate, 'rx': library.RXGate,
+        'ry': library.RYGate, 'rz': library.RZGate, 'p': library.PhaseGate,
+        'cx': library.CXGate, 'cz': library.CZGate,
+        'cp': library.CPhaseGate, 'swap': library.SwapGate,
+        'id': library.IGate, 'barrier': Barrier, 'measure': Measure,
+        'delay': Delay,
+    }
 
-                mq_circuit.measure(qubit_indices[0], cl_indices[0])
-            except Exception:
-                # If measurement conversion fails, skip it but warn? 
-                # For benchmarking, we NEED measurement.
-                # Assuming standard execution where cargs are well-formed.
-                pass
-        else:
-             # Fallback: Check if it's a controlled gate that we can decompose?
-             # For now, start with raising Error
-             pass # raise ValueError(f"Unsupported gate for conversion: {name}")
-             # Or just print warning to avoid crashing benchmark on rare gates
-             print(f"Warning: Gate {name} not supported by adapter yet.")
+    phase = qc_qiskit.global_phase
+    if getattr(phase, 'parameters', ()):
+        raise ValidationError(
+            "Bind the symbolic global phase in Qiskit before converting."
+        )
 
-            
+    mq_circuit = Circuit(qc_qiskit.num_qubits, qc_qiskit.num_clbits)
+    phase = math.remainder(float(phase), math.tau)
+    if abs(phase) > 1e-15:
+        # P(2φ) RZ(-2φ) = exp(iφ) I on either basis state.
+        mq_circuit.rz(-2 * phase, 0)
+        mq_circuit.p(2 * phase, 0)
+    parameter_map = {}
+    measured_qubits = set()
+
+    for index, item in enumerate(qc_qiskit.data):
+        operation = item.operation
+        name = operation.name
+        qubits = [qc_qiskit.find_bit(q).index for q in item.qubits]
+        context = f"'{name}' at instruction {index} on qubits {qubits}"
+
+        if getattr(operation, 'condition', None) is not None:
+            raise ValidationError(
+                f"Classically conditioned operation {context} is unsupported."
+            )
+        if (name not in supported_types
+                or operation.base_class is not supported_types[name]):
+            raise ValidationError(f"Unsupported operation {context}.")
+        if name == 'delay':
+            continue
+        if name == 'measure':
+            clbit = qc_qiskit.find_bit(item.clbits[0]).index
+            mq_circuit.measure(qubits[0], clbit)
+            measured_qubits.add(qubits[0])
+            continue
+        if name != 'barrier' and not measured_qubits.isdisjoint(qubits):
+            raise ValidationError(
+                f"Cannot convert {context}: only terminal measurements "
+                "are supported (gate acts on a previously measured qubit)."
+            )
+
+        params = []
+        for value in operation.params:
+            if isinstance(value, QiskitParameter):
+                # Qiskit Parameter equality/hash use UUID, not just the name.
+                if value not in parameter_map:
+                    parameter_map[value] = Parameter(value.name)
+                params.append(parameter_map[value])
+            else:
+                message = (
+                    f"Unsupported parameter in {context}. Bind parameter "
+                    "expressions in Qiskit before converting."
+                )
+                if getattr(value, 'parameters', ()):
+                    raise ValidationError(message)
+                try:
+                    params.append(float(value))
+                except (TypeError, ValueError) as exc:
+                    raise ValidationError(message) from exc
+
+        getattr(mq_circuit, name)(*params, *qubits)
+
     return mq_circuit
+
 
 def to_qiskit(mq_circuit: Circuit) -> Any:
     """

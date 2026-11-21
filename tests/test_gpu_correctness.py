@@ -70,6 +70,8 @@ class TestMPSGateParity:
         ("s",     lambda c: c.s(1)),
         ("t",     lambda c: c.t(2)),
         ("sdg",   lambda c: c.sdg(1)),
+        ("sx",    lambda c: c.sx(2)),
+        ("sxdg",  lambda c: c.sxdg(1)),
         ("tdg",   lambda c: c.tdg(2)),
         ("p",     lambda c: c.p(0.4, 1)),
         ("cy",    lambda c: c.cy(0, 2)),
@@ -96,6 +98,23 @@ class TestMPSGateParity:
         c0 = Circuit(1); c0.h(0)
         c1 = Circuit(1); c1.h(0); c1.s(0)
         assert np.max(np.abs(_mps.statevector(c0) - _mps.statevector(c1))) > 0.1
+
+    @pytest.mark.parametrize("name", ["sx", "sxdg"])
+    def test_fixed_sqrt_x_does_not_add_adjoint_parameters(self, name):
+        from metalq import Parameter
+
+        theta = Parameter("theta")
+        circuit = Circuit(1)
+        getattr(circuit, name)(0)
+        circuit.rx(theta, 0)
+        angle = 0.37
+        # SX shifts the X rotation by +π/2, its adjoint by -π/2.
+        sign = 1 if name == "sx" else -1
+        expected = [-np.sin(angle + sign * np.pi / 2)]
+        np.testing.assert_allclose(
+            _mps.gradient(circuit, 1.0 * Z(0), [angle], method="adjoint"),
+            expected, atol=1e-5,
+        )
 
 
 @needs_mps
