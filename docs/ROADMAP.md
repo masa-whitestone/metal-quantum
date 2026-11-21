@@ -49,6 +49,34 @@ build a GPU alias table for very high shot counts.
 - Backward pass in adjoint diff calls `encode_gate` per inverse gate without
   the 1q-fusion used in forward passes.
 
+## CPU backend
+
+The CPU backend now fuses gates into Accelerate GEMM blocks, reduces every
+Hamiltonian term in one statevector pass, and differentiates with a blocked
+adjoint sweep (one Numba kernel per ≤3-qubit block that unwinds ψ and λ
+together). Remaining opportunities, in rough order of expected impact:
+
+- **Re-tune the reverse-sweep block size on Apple Silicon.** `BLOCK_QUBITS=3`
+  was chosen on a 4-core Linux box with a 260 MB L3, where ψ+λ stay
+  cache-resident and the sweep is instruction-bound. On M-series parts the
+  sweep is DRAM-bound, so K=4 (half the passes) may win; the choice is a
+  single constant in `adjoint.py` and `benchmarks/cpu_vqe_benchmark.py`
+  measures it.
+- **Small-n Python overhead.** Below ~12 qubits a gradient call is dominated
+  by `_pack_block` (matrix packing per block); caching the packed arrays per
+  circuit structure + parameter values would remove most of it.
+- **Persistent statevector for VQE loops.** Every `expectation_and_gradient`
+  call re-runs the forward pass from |0…0⟩; a handle that keeps ψ and the
+  fusion layout across observables would let one forward serve several
+  Hamiltonians.
+- **Sampling.** `np.random.choice` over 2^n probabilities materialises a
+  float64 probability array and a CDF; a Numba alias table or chunked
+  inverse-CDF sampling would cut the 24-qubit sampling cost.
+- **Parameter-shift fallback.** Controlled rotations (crx/cry/crz/cp) need
+  the 4-term shift rule and the `r(θ, φ)` gate's φ has no simple shift rule;
+  both only matter when the adjoint path is refused (u2/u3/r with free
+  parameters, non-linear expressions).
+
 ## Features
 
 ### Arbitrary unitary gate GPU path

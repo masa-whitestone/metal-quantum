@@ -3,7 +3,7 @@ metalq/backends/cpu/backend.py - High-Performance CPU Backend
 
 NumPy + Numba + Polars による高速 CPU シミュレーション。
 """
-from typing import Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 import numpy as np
 import time
 
@@ -27,22 +27,30 @@ class CPUBackend(Backend):
     def __init__(self,
                  fusion: bool = True,
                  max_fused_qubits: int = 4,
-                 dtype=np.complex128):
+                 dtype: Union[type, np.dtype] = np.complex128):
         """Initialize CPU backend.
 
         Args:
-            fusion: Fuse consecutive gates into multi-qubit blocks and
-                apply each block as one Accelerate GEMM (AMX-accelerated
-                on Apple Silicon). Falls back to per-gate kernels when
-                False.
-            max_fused_qubits: Maximum qubits per fused block (block
+            fusion (bool): Fuse consecutive gates into multi-qubit blocks
+                and apply each block as one Accelerate GEMM
+                (AMX-accelerated on Apple Silicon). Falls back to
+                per-gate kernels when False.
+            max_fused_qubits (int): Maximum qubits per fused block (block
                 matrices are 2^k x 2^k).
-            dtype: Statevector precision, complex128 (default) or
-                complex64. complex64 halves memory traffic and runs the
-                fused blocks as sgemm (~2-3.6x faster on Apple Silicon);
-                state error stays ~1e-6 for 1000 fused blocks and
-                expectation values are always reduced in float64.
-                Requires fusion=True.
+            dtype (numpy.dtype or type): Statevector precision,
+                complex128 (default) or complex64. complex64 halves
+                memory traffic and runs the fused blocks as sgemm
+                (~2-3.6x faster on Apple Silicon); state error stays
+                ~1e-6 for 1000 fused blocks and expectation values are
+                always reduced in float64. Requires fusion=True.
+
+        Note:
+            On Linux/OpenBLAS builds, run with ``OPENBLAS_NUM_THREADS=1``.
+            The fused path already splits each block GEMM across threads
+            and the Numba kernels are parallel, so a additionally
+            threaded BLAS oversubscribes the cores and can inflate
+            timings by an order of magnitude. Accelerate (macOS) manages
+            this itself and needs no such setting.
         """
         dtype = np.dtype(dtype)
         if dtype not in (np.dtype(np.complex64), np.dtype(np.complex128)):
@@ -236,17 +244,25 @@ class CPUBackend(Backend):
         """Compute the gradient of <H> w.r.t. the circuit parameters.
 
         method='adjoint' (default) runs the reversible adjoint sweep
-        (~3 circuit applications for ALL parameters instead of
+        (~2 circuit applications for ALL parameters instead of
         parameter-shift's 2p full executions). Circuits the adjoint
         method cannot handle (multi-parameter gates like u2/u3/r with
         free parameters, non-linear parameter expressions, no Numba)
         fall back to parameter-shift automatically.
         method='parameter_shift' forces the shift rule.
+
+        Returns:
+            np.ndarray of shape (len(circuit.parameters),), one entry per
+            *unique* circuit parameter in first-appearance order (a
+            parameter used by several gates gets the summed contribution;
+            see Backend.gradient).
         """
         if method == 'adjoint':
-            from .adjoint import adjoint_gradient, AdjointUnsupported
+            from .adjoint import (adjoint_energy_and_gradient,
+                                  AdjointUnsupported)
             try:
-                return adjoint_gradient(self, circuit, hamiltonian, params)
+                return adjoint_energy_and_gradient(
+                    self, circuit, hamiltonian, params)[1]
             except AdjointUnsupported:
                 pass
 
@@ -254,3 +270,35 @@ class CPUBackend(Backend):
         return parameter_shift_gradient(
             self, circuit, hamiltonian, params
         )
+
+    def expectation_and_gradient(self,
+                                 circuit: 'Circuit',
+                                 hamiltonian: 'Hamiltonian',
+                                 params: List[float]
+                                 ) -> Tuple[float, np.ndarray]:
+        """Compute <H> and its gradient in a single adjoint sweep.
+
+        The base-class default runs the circuit twice (expectation() then
+        gradient()); the adjoint machinery already produces both, since
+        the energy is Re<ψ|λ> for the costate λ = H_eff ψ it has to build
+        anyway (the anti-Hermitian part of each Pauli term only feeds the
+        imaginary part, so this equals expectation() exactly).
+
+        Falls back to expectation() + parameter-shift for circuits the
+        adjoint method cannot differentiate.
+
+        Returns:
+            Tuple[float, np.ndarray]: the energy and the gradient array,
+            one entry per unique circuit parameter as in gradient().
+        """
+        from .adjoint import adjoint_energy_and_gradient, AdjointUnsupported
+        try:
+            return adjoint_energy_and_gradient(
+                self, circuit, hamiltonian, params)
+        except AdjointUnsupported:
+            pass
+
+        from .gradient import parameter_shift_gradient
+        energy = self.expectation(circuit, hamiltonian, params)
+        return energy, parameter_shift_gradient(
+            self, circuit, hamiltonian, params)

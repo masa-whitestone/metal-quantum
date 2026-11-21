@@ -545,3 +545,65 @@ def test_fusion_stats_sanity():
     assert d['t_gemm_ms'] >= 0.0
     assert d['t_perm_ms'] >= 0.0
     assert d['t_phase_ms'] >= 0.0
+
+
+def test_expectation_multi_term_equals_sum_of_single_terms():
+    # The reduction kernel handles ALL Hamiltonian terms in one statevector
+    # pass (grouped by X/Y mask). On a real fused, lazily-permuted layout
+    # that must agree term-for-term with evaluating each term on its own,
+    # for both statevector precisions.
+    n = 7
+    gates = _random_circuit(n, 45)
+    circ = _GateCircuit(n, gates)
+    H = _random_hamiltonian(n, 12)
+
+    sv_ref = CPUBackend(fusion=False).statevector(circ)
+    ref = expectation_from_statevector(sv_ref, H, n)
+
+    for dtype, tol in ((np.complex128, 1e-9), (np.complex64, 2e-4)):
+        backend = CPUBackend(fusion=True, dtype=dtype)
+        got = backend.expectation(circ, H)
+        per_term = sum(backend.expectation(circ, Hamiltonian([t]))
+                       for t in H.terms)
+        assert abs(got - ref) < tol
+        assert abs(got - per_term) < tol
+
+
+def test_adjoint_stats_counts_one_kernel_per_block():
+    # AdjointStats mirrors FusionStats for the reverse sweep: one Numba
+    # launch for lambda = H psi plus one per fused unwind block, and four
+    # statevector-sized read/write units per block (psi and lambda, in and
+    # out) on top of the lambda build's two.
+    from metalq.backends.cpu import adjoint as adj
+    from metalq import Parameter
+
+    n = 5
+    c = Circuit(n)
+    ps = []
+    for q in range(n):
+        p = Parameter(f'a{q}')
+        ps.append(p)
+        c.ry(p, q)
+    for q in range(n - 1):
+        c.cx(q, q + 1)
+    for q in range(n):
+        p = Parameter(f'b{q}')
+        ps.append(p)
+        c.rz(2 * p, q)
+
+    from metalq.spin import Z, X
+    H = Z(0) @ Z(1) + 0.5 * X(2)
+
+    adj.stats.reset()
+    assert adj.stats.n_kernels == 0
+    grads = CPUBackend().gradient(c, H, [0.1] * len(ps))
+    assert grads.shape == (len(ps),)
+
+    d = adj.stats.as_dict()
+    assert d['n_blocks'] >= 1
+    assert d['n_kernels'] == d['n_blocks'] + 1       # + the lambda build
+    assert d['n_gates'] == len([g for g in c._gates if g.name != 'barrier'])
+    assert d['n_passes'] == 4.0 * d['n_blocks'] + 2.0
+    # Blocking must actually batch gates: far fewer launches than the
+    # 3-kernels-per-gate per-gate sweep it replaces.
+    assert d['n_kernels'] < 3 * d['n_gates']

@@ -4,7 +4,7 @@ Metal-Q uniquely integrates with PyTorch, allowing quantum circuits to be used a
 
 ## Quantum Layer
 
-The `QuantumLayer` class wraps a parameterized `Circuit` and an observable (`Hamiltonian`) into a PyTorch module. It automatically computes gradients using the Adjoint Differentiation method (or Parameter Shift rule on CPU).
+The `QuantumLayer` class wraps a parameterized `Circuit` and an observable (`Hamiltonian`) into a PyTorch module. It automatically computes gradients using the Adjoint Differentiation method on both the MPS (GPU) and CPU backends; the energy and all gradients come from a single fused `expectation_and_gradient` call per step. Circuits containing parameterized gates the adjoint method does not cover (`u2`/`u3`/`r` with free parameters) fall back to the parameter-shift rule automatically.
 
 ### Example: Simple Optimization
 

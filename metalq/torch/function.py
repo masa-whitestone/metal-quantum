@@ -69,48 +69,24 @@ class QuantumFunction(torch.autograd.Function):
         else:
             # forward() didn't anticipate needing a gradient (e.g. called under
             # a no-grad context that later got overridden); compute it now.
-            # If backend supports 'adjoint', it will be fast.
-            # Only MPS supports 'adjoint' currently.
-            method = 'adjoint' if backend.name == 'mps' else 'parameter_shift'
-            grads = backend.gradient(circuit, hamiltonian, ctx.params_list, method=method)
-        
-        # Chain Rule Mapping (Gate Grads -> Circuit Param Grads)
-        # backend.gradient returns flat array of gradients for every gate parameter.
-        
-        unique_params = circuit.parameters
-        num_inputs = len(unique_params)
-        final_grads = np.zeros(num_inputs)
-        
-        gate_ptr = 0
-        from ..parameter import Parameter, ParameterExpression
-        
-        for gate in circuit.gates:
-            for p in gate.params:
-                # Backend gradient for this gate parameter
-                g_gate = grads[gate_ptr]
-                gate_ptr += 1
-                
-                # Distribution to input parameters (Chain Rule)
-                # dL/dInput = dL/dGate * dGate/dInput
-                
-                if isinstance(p, Parameter):
-                    # Direct parameter
-                    # Find index in unique_params (inefficient search? Map would be better)
-                    # Optimization: Create map once in Forward? 
-                    # For MVP, linear scan or check.
-                    try:
-                        idx = unique_params.index(p)
-                        final_grads[idx] += g_gate
-                    except ValueError:
-                        pass # Parameter not in inputs?
-                        
-                elif isinstance(p, ParameterExpression):
-                    # Expression: dGate/dInput comes from p.grad(up)
-                    for i, up in enumerate(unique_params):
-                        scale = p.grad(up)
-                        if abs(scale) > 1e-9:
-                            final_grads[i] += g_gate * scale
-                            
+            # Every backend accepts method='adjoint' and falls back internally
+            # (CPU: to parameter-shift; MPS: to parameter-shift for gates its
+            # native kernel can't differentiate).
+            grads = backend.gradient(circuit, hamiltonian, ctx.params_list,
+                                     method='adjoint')
+
+        # backend.gradient() already returns one entry per unique circuit
+        # parameter, in circuit.parameters order == the order of the input
+        # tensor (see Backend.gradient's contract). Backends whose kernels
+        # produce per-gate-parameter-slot values map them through
+        # backends.base.gate_slot_grads_to_parameter_grads themselves, so no
+        # chain-rule pass is needed here.
+        final_grads = np.asarray(grads, dtype=float).ravel()
+        if final_grads.size != len(circuit.parameters):
+            raise ValueError(
+                f"backend '{backend.name}' returned {final_grads.size} "
+                f"gradients for {len(circuit.parameters)} circuit parameters")
+
         # Convert to tensor
         grads_tensor = torch.from_numpy(final_grads).to(params_tensor.dtype)
         
