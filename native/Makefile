@@ -32,7 +32,7 @@ $(TARGET_LIB): $(OBJS)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(LDFLAGS) -o $@ $^
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.m
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.m $(wildcard $(INC_DIR)/*.h $(SRC_DIR)/*.h)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(INC_DIR) -c $< -o $@
 
@@ -44,5 +44,6 @@ $(METALLIB): $(SRC_DIR)/quantum_gates.metal $(SRC_DIR)/adjoint.metal
 
 clean:
 	rm -rf $(BUILD_DIR)
+	rm -f $(PYLIB_DIR)/libmetalq.dylib $(PYLIB_DIR)/default.metallib
 
 .PHONY: all clean pylib

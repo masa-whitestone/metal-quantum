@@ -10,20 +10,24 @@ Metal-Q is a high-performance quantum circuit simulator for Apple Silicon (M1-M4
 
 ### Native library (required for MPS backend)
 ```bash
-cd native && make clean && make && cd ..
+make
 ```
-This compiles Metal shaders and Objective-C code into `metalq/lib/libmetalq.dylib` and `metalq/lib/quantum_gates.metallib`.
+This delegates to `native/Makefile`, compiles Objective-C and Metal sources under
+`native/build/`, and copies `libmetalq.dylib` and `default.metallib` to `metalq/lib/`.
+`make install` is an alias for the same build/copy operation. `make clean` removes
+both the native build directory and these packaged binaries. See
+`docs/installation.md` for Metal toolchain setup.
 
 ### Install package (editable)
 ```bash
-pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
 ### Run tests
 ```bash
-pytest tests/ -v                    # all tests
-pytest tests/test_api_basic.py -v   # single file
-pytest tests/test_api_basic.py::test_name -v  # single test
+make test                           # build native library, then run all tests
+make test PYTHON=python3 PYTEST_ARGS="tests/test_backend_mps.py -q"
+python -m pytest tests/test_backend_cpu.py -v  # no native build required
 ```
 
 ### Documentation
@@ -63,4 +67,4 @@ Circuit.bind_parameters() → Backend.run()/statevector()/expectation()
 - **macOS 12.0+ with Apple Silicon only** (M1-M4)
 - Statevector simulation is memory-exponential; practical limit ~30 qubits
 - No noise models (ideal simulation only)
-- Requires Xcode Command Line Tools for native build
+- Requires Xcode with Metal compiler tools for native builds on macOS

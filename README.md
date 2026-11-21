@@ -28,7 +28,7 @@ Metal-Q is a comprehensive quantum computing library designed specifically for A
 *   macOS 12.0+ (Monterey or later)
 *   Apple Silicon (M1/M2/M3/M4) Mac
 *   Python 3.10+
-*   Xcode Command Line Tools (source builds only — the PyPI wheel ships prebuilt binaries)
+*   Xcode with Metal compiler tools (source builds only — the PyPI wheel ships prebuilt binaries)
 
 ### Install from PyPI
 
@@ -43,11 +43,15 @@ git clone https://github.com/masa-whitestone/metal-quantum.git
 cd metal-quantum
 
 # Compile native Metal library
-cd native && make && cd ..
+make
 
 # Install Python package
-pip install -e .
+python -m pip install -e .
 ```
+
+See [Metal compiler setup](docs/installation.md#metal-compiler-tools) if the
+compiler or toolchain is unavailable. For development dependencies and tests,
+see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Quick Start
 
