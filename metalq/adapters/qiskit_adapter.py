@@ -12,10 +12,12 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
     """Convert a Qiskit QuantumCircuit without silently changing its meaning.
 
     Supported standard gates are id, h, x, y, z, s, sdg, t, tdg, sx, sxdg,
-    rx, ry, rz, p, cx, cz, cp and swap. Numeric global phases are encoded
-    using rz and p. Delays are ignored in ideal simulation. Barriers and
-    measurements terminal on their qubits are supported across registers and
-    loose bits.
+    rx, ry, rz, p, r and u; cx, cy, cz, ch, cp, crx, cry, crz, swap, iswap,
+    rxx, ryy, rzx and rzz; and ccx, ccz and cswap, matching to_qiskit.
+    Open-controlled variants (such as ctrl_state=0) are rejected. Numeric
+    global phases are encoded using rz and p. Delays are ignored in ideal
+    simulation. Barriers and measurements terminal on their qubits are
+    supported across registers and loose bits.
     Classical bit counts and measurement destinations are preserved. This
     does not change the backend's counts formatting or sampling behavior.
 
@@ -48,8 +50,15 @@ def to_metalq(qc_qiskit: Any) -> Circuit:
         't': library.TGate, 'tdg': library.TdgGate, 'sx': library.SXGate,
         'sxdg': library.SXdgGate, 'rx': library.RXGate,
         'ry': library.RYGate, 'rz': library.RZGate, 'p': library.PhaseGate,
-        'cx': library.CXGate, 'cz': library.CZGate,
-        'cp': library.CPhaseGate, 'swap': library.SwapGate,
+        'r': library.RGate, 'u': library.UGate,
+        'cx': library.CXGate, 'cy': library.CYGate, 'cz': library.CZGate,
+        'ch': library.CHGate, 'cp': library.CPhaseGate,
+        'crx': library.CRXGate, 'cry': library.CRYGate,
+        'crz': library.CRZGate, 'swap': library.SwapGate,
+        'iswap': library.iSwapGate, 'rxx': library.RXXGate,
+        'ryy': library.RYYGate, 'rzx': library.RZXGate,
+        'rzz': library.RZZGate, 'ccx': library.CCXGate,
+        'ccz': library.CCZGate, 'cswap': library.CSwapGate,
         'id': library.IGate, 'barrier': Barrier, 'measure': Measure,
         'delay': Delay,
     }

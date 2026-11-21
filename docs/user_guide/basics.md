@@ -80,10 +80,18 @@ Counts (CPU): {'11': 491, '00': 509}
 
 Metal-Q provides adapters to convert supported Qiskit circuits for simulation.
 
-`to_metalq` supports the standard gates `id`, `h`, `x`, `y`, `z`, `s`, `sdg`, `t`,
-`tdg`, `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `cx`, `cz`, `cp`, and `swap`,
-plus barriers and measurements. After a measurement, gates can still act on
-unmeasured qubits. Standard `delay` instructions are skipped in ideal simulation.
+`to_metalq` supports barriers, measurements, and the same standard gates that
+`to_qiskit` exports:
+
+- Single-qubit gates: `id`, `h`, `x`, `y`, `z`, `s`, `sdg`, `t`, `tdg`,
+  `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `r`, and `u`.
+- Two-qubit gates: `cx`, `cy`, `cz`, `ch`, `cp`, `crx`, `cry`, `crz`, `swap`,
+  `iswap`, `rxx`, `ryy`, `rzx`, and `rzz`.
+- Three-qubit gates: `ccx`, `ccz`, and `cswap`.
+
+Open-controlled variants, such as `cx` with `ctrl_state=0`, are rejected.
+After a measurement, gates can still act on unmeasured qubits. Standard
+`delay` instructions are skipped in ideal simulation.
 The adapter encodes numeric global phases, including those introduced by
 Qiskit's transpiler, with an `rz` and a `p` gate. It omits the pair for phases
 within `1e-15` radians of a multiple of 2π.
