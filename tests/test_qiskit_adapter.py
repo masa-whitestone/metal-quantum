@@ -6,11 +6,37 @@ import pytest
 qiskit = pytest.importorskip("qiskit")
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.circuit import Clbit, Gate, Parameter, ParameterVector, Qubit
+from qiskit.circuit.library import U3Gate
 from qiskit.quantum_info import Statevector
 
-from metalq.adapters.qiskit_adapter import to_metalq
+from metalq import Circuit
+from metalq import Parameter as MetalQParameter
+from metalq.adapters.qiskit_adapter import to_metalq, to_qiskit
 from metalq.backends.cpu.backend import CPUBackend
 from metalq.exceptions import ValidationError
+
+# (qubit count, parameter count) of every gate that to_qiskit exports.
+GATES = {
+    "id": (1, 0), "h": (1, 0), "x": (1, 0), "y": (1, 0), "z": (1, 0),
+    "s": (1, 0), "sdg": (1, 0), "t": (1, 0), "tdg": (1, 0), "sx": (1, 0),
+    "sxdg": (1, 0), "rx": (1, 1), "ry": (1, 1), "rz": (1, 1), "p": (1, 1),
+    "r": (1, 2), "u": (1, 3), "cx": (2, 0), "cy": (2, 0), "cz": (2, 0),
+    "ch": (2, 0), "cp": (2, 1), "crx": (2, 1), "cry": (2, 1),
+    "crz": (2, 1), "swap": (2, 0), "iswap": (2, 0), "rxx": (2, 1),
+    "ryy": (2, 1), "rzx": (2, 1), "rzz": (2, 1), "ccx": (3, 0),
+    "ccz": (3, 0), "cswap": (3, 0),
+}
+# Non-adjacent and reversed wires on four qubits, by gate arity.
+WIRE_ORDERS = {
+    1: [[3], [1]],
+    2: [[3, 0], [0, 2], [2, 1]],
+    3: [[3, 0, 2], [0, 3, 1], [2, 1, 0]],
+}
+GATE_CASES = [
+    (name, wires) for name, (arity, _) in GATES.items()
+    for wires in WIRE_ORDERS[arity]
+]
+SHARED = object()  # Placeholder for the shared parameter in round trips.
 
 
 @pytest.fixture(scope="module")
@@ -25,6 +51,19 @@ def assert_state_matches(cpu, converted, reference):
         rtol=1e-12,
         atol=1e-12,
     )
+
+
+def entangled_circuit(rng, num_qubits=4):
+    """Prepare a generic entangled state from supported gates."""
+    qc = QuantumCircuit(num_qubits)
+    for q in range(num_qubits):
+        qc.ry(rng.uniform(-np.pi, np.pi), q)
+        qc.rz(rng.uniform(-np.pi, np.pi), q)
+    for q in range(num_qubits - 1):
+        qc.cx(q, q + 1)
+    for q in range(num_qubits):
+        qc.rx(rng.uniform(-np.pi, np.pi), q)
+    return qc
 
 
 @pytest.mark.parametrize(
@@ -54,6 +93,24 @@ def test_supported_gates_match_qiskit(cpu, name, params, wires):
     assert_state_matches(cpu, converted, qc)
 
 
+@pytest.mark.parametrize(
+    "case,name,wires",
+    [(i, name, wires) for i, (name, wires) in enumerate(GATE_CASES)],
+    ids=[f"{name}-{wires}" for name, wires in GATE_CASES],
+)
+def test_all_exported_gates_match_qiskit_on_entangled_states(
+        cpu, case, name, wires):
+    rng = np.random.default_rng(case)
+    qc = entangled_circuit(rng)
+    position = len(qc.data)
+    params = rng.uniform(-np.pi, np.pi, GATES[name][1]).tolist()
+    getattr(qc, name)(*params, *wires)
+    converted = to_metalq(qc)
+    gate = converted.gates[position]
+    assert (gate.name, gate.qubits, gate.params) == (name, wires, params)
+    assert_state_matches(cpu, converted, qc)
+
+
 def test_bell_state(cpu):
     qc = QuantumCircuit(2)
     qc.h(0)
@@ -76,18 +133,11 @@ def test_transpiled_bell_state_including_global_phase(cpu):
 def test_mixed_circuits_match_qiskit(cpu, seed):
     rng = np.random.default_rng(seed)
     qc = QuantumCircuit(QuantumRegister(2, "a"), QuantumRegister(3, "b"))
-    single = ["h", "x", "y", "z", "s", "sdg", "t", "tdg", "sx", "sxdg"]
-    rotations = ["rx", "ry", "rz", "p"]
-    pairs = ["cx", "cz", "cp", "swap"]
     for _ in range(50):
-        name = rng.choice(single + rotations + pairs)
-        if name in pairs:
-            wires = rng.choice(5, size=2, replace=False).tolist()
-        else:
-            wires = [int(rng.integers(5))]
-        params = (
-            [rng.uniform(-np.pi, np.pi)] if name in rotations + ["cp"] else []
-        )
+        name = str(rng.choice(list(GATES)))
+        num_qubits, num_params = GATES[name]
+        wires = rng.choice(5, size=num_qubits, replace=False).tolist()
+        params = rng.uniform(-np.pi, np.pi, num_params).tolist()
         getattr(qc, name)(*params, *wires)
     assert_state_matches(cpu, to_metalq(qc), qc)
 
@@ -216,13 +266,21 @@ def test_expression_bound_in_qiskit_is_supported(cpu):
 
 
 @pytest.mark.parametrize(
-    "kind", ["cry", "reset", "custom", "if_else", "open_cx"],
+    "kind",
+    ["cs", "u3", "reset", "custom", "if_else", "open_cx", "open_crx",
+     "open_ccx"],
 )
 def test_unsupported_operations_rejected_with_context(kind):
-    qc = QuantumCircuit(2, 1)
+    qc = QuantumCircuit(3, 1)
     qc.x(0)
-    if kind == "cry":
-        qc.cry(np.pi / 3, 0, 1)
+    if kind == "cs":
+        qc.cs(0, 1)
+    elif kind == "u3":
+        qc.append(U3Gate(0.3, -0.2, 0.5), [1])
+    elif kind == "open_crx":
+        qc.crx(np.pi / 3, 2, 0, ctrl_state=0)
+    elif kind == "open_ccx":
+        qc.ccx(0, 2, 1, ctrl_state=1)
     elif kind == "reset":
         qc.reset(0)
     elif kind == "custom":
@@ -236,14 +294,19 @@ def test_unsupported_operations_rejected_with_context(kind):
         to_metalq(qc)
 
 
-@pytest.mark.parametrize("name", ["x", "delay", "id"])
-def test_custom_gate_cannot_impersonate_supported_name(name):
-    qc = QuantumCircuit(1)
-    custom = Gate(name, 1, [])
-    definition = QuantumCircuit(1)
-    definition.h(0)
+@pytest.mark.parametrize(
+    "name,num_qubits,params",
+    [("x", 1, []), ("delay", 1, []), ("id", 1, []),
+     ("u", 1, [0.1, 0.2, 0.3]), ("rzz", 2, [0.4]), ("cswap", 3, [])],
+)
+def test_custom_gate_cannot_impersonate_supported_name(
+        name, num_qubits, params):
+    qc = QuantumCircuit(num_qubits)
+    custom = Gate(name, num_qubits, params)
+    definition = QuantumCircuit(num_qubits)
+    definition.h(range(num_qubits))
     custom.definition = definition
-    qc.append(custom, [0])
+    qc.append(custom, range(num_qubits))
     with pytest.raises(ValidationError, match=f"Unsupported.*'{name}'"):
         to_metalq(qc)
 
@@ -314,7 +377,7 @@ def test_conversion_does_not_mutate_input(unsupported):
     qc = QuantumCircuit(2, 3)
     qc.rx(theta, 1)
     if unsupported:
-        qc.cry(0.2, 0, 1)
+        qc.cs(0, 1)
     qc.measure(1, 2)
     original = qc.copy()
     if unsupported:
@@ -324,3 +387,106 @@ def test_conversion_does_not_mutate_input(unsupported):
         to_metalq(qc)
     assert qc == original
     assert qc.num_parameters == 1
+
+
+def round_trip_spec():
+    """Every exported gate on shuffled wires, as (name, params, wires).
+
+    Each parameter slot of each parameterized gate holds SHARED once, with
+    distinct numbers elsewhere, so permuted slots or lost sharing show up.
+    """
+    rng = np.random.default_rng(7)
+    gates = []
+    for name, (num_qubits, num_params) in GATES.items():
+        for slot in range(max(num_params, 1)):
+            params = rng.uniform(-np.pi, np.pi, num_params).tolist()
+            if num_params:
+                params[slot] = SHARED
+            wires = rng.choice(4, size=num_qubits, replace=False).tolist()
+            gates.append((name, params, wires))
+    order = rng.permutation(len(gates))
+    prep = [("ry", [rng.uniform(-np.pi, np.pi)], [q]) for q in range(4)]
+    return prep + [gates[i] for i in order]
+
+
+def build_round_trip_circuit(circuit, spec, parameter):
+    for name, params, wires in spec:
+        values = [parameter if p is SHARED else p for p in params]
+        getattr(circuit, name)(*values, *wires)
+    return circuit
+
+
+def expected_gates(spec, parameter):
+    return [
+        (name, wires, [parameter if p is SHARED else p for p in params])
+        for name, params, wires in spec
+    ]
+
+
+@pytest.mark.parametrize("angle", [-0.8, 1.3])
+def test_metalq_to_qiskit_to_metalq_round_trip(cpu, angle):
+    spec = round_trip_spec()
+    assert {name for name, _, _ in spec} == set(GATES)
+    theta = MetalQParameter("theta")
+    original = build_round_trip_circuit(Circuit(4), spec, theta)
+    exported = to_qiskit(original)
+    restored = to_metalq(exported)
+
+    assert exported.num_parameters == 1
+    assert restored.num_parameters == 1
+    shared = restored.parameters[0]
+    assert shared is not theta and shared.name == "theta"
+    actual = [(g.name, g.qubits, g.params) for g in restored.gates]
+    assert actual == expected_gates(spec, shared)
+    assert all(
+        p is shared for g in restored.gates for p in g.params
+        if isinstance(p, MetalQParameter)
+    )
+
+    bound = restored.bind_parameters({shared: angle})
+    np.testing.assert_allclose(
+        cpu.statevector(bound),
+        cpu.statevector(original.bind_parameters({theta: angle})),
+        rtol=1e-12, atol=1e-12,
+    )
+    qiskit_parameter = next(iter(exported.parameters))
+    assert_state_matches(
+        cpu, bound, exported.assign_parameters({qiskit_parameter: angle}),
+    )
+
+
+@pytest.mark.parametrize("angle", [-0.8, 1.3])
+def test_qiskit_to_metalq_to_qiskit_round_trip(cpu, angle):
+    spec = round_trip_spec()
+    theta = Parameter("theta")
+    original = build_round_trip_circuit(QuantumCircuit(4), spec, theta)
+    imported = to_metalq(original)
+    restored = to_qiskit(imported)
+
+    assert imported.num_parameters == 1
+    imported_theta = imported.parameters[0]
+    assert imported_theta.name == "theta"
+    assert all(
+        p is imported_theta for g in imported.gates for p in g.params
+        if isinstance(p, MetalQParameter)
+    )
+    assert restored.num_parameters == 1
+    shared = next(iter(restored.parameters))
+    assert shared.name == "theta"
+    actual = [
+        (item.operation.name,
+         [restored.find_bit(q).index for q in item.qubits],
+         list(item.operation.params))
+        for item in restored.data
+    ]
+    assert actual == expected_gates(spec, shared)
+
+    reference = original.assign_parameters({theta: angle})
+    np.testing.assert_allclose(
+        Statevector(restored.assign_parameters({shared: angle})).data,
+        Statevector(reference).data,
+        rtol=1e-12, atol=1e-12,
+    )
+    assert_state_matches(
+        cpu, imported.bind_parameters({imported_theta: angle}), reference,
+    )
