@@ -158,3 +158,39 @@ q_0: ┤ H ├──■─────────────
 q_1: ─────┤ X ├┤ Rz(0.5) ├
           └───┘└─────────┘
 ```
+
+### Exporting Metal-Q circuits
+
+`to_qiskit` supports barriers and the following standard gates:
+
+- Single-qubit gates: `id`, `h`, `x`, `y`, `z`, `s`, `sdg`, `t`, `tdg`,
+  `sx`, `sxdg`, `rx`, `ry`, `rz`, `p`, `r`, and `u`.
+- Two-qubit gates: `cx`, `cy`, `cz`, `ch`, `cp`, `crx`, `cry`, `crz`, `swap`,
+  `iswap`, `rxx`, `ryy`, `rzx`, and `rzz`.
+- Three-qubit gates: `ccx`, `ccz`, and `cswap`.
+
+Circuits without measurements export with zero classical bits, so they can
+be used with Qiskit's `to_gate()` and `control()`. For measured circuits,
+the full classical width and all measurement destinations are preserved.
+Measurements follow the gates in their original measurement order.
+
+Shared Metal-Q parameters remain shared in Qiskit. After a round trip,
+`ParameterVector` elements are ordinary Qiskit parameters. Bind the exported
+parameters by name or object because positional binding sorts names such as
+`v[10]` before `v[2]`. Distinct parameters with the same name raise
+`ValidationError`. Bind them or use unique names before export.
+General parameter expressions must first be bound with `Circuit.bind_parameters`.
+Unsupported gates also raise `ValidationError`, identifying the operation, its
+zero-based gate index, and its qubits. They are never silently omitted. Export
+does not modify the input circuit.
+
+```python
+from metalq import Circuit, Parameter
+from metalq.adapters import to_qiskit
+
+theta = Parameter("theta")
+circuit = Circuit(2, 3).rx(theta, 0).rz(theta, 1).measure(1, 2)
+exported = to_qiskit(circuit)
+assert exported.num_parameters == 1
+assert exported.num_clbits == 3
+```
