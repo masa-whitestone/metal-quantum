@@ -116,4 +116,4 @@ jobs:
 
       - name: Full test suite (informational)
         continue-on-error: true
-        run: python -m pytest -q -rs -p no:cacheprovider tests/
+        run: python -m pytest -q --tb=no -rfs -p no:cacheprovider tests/
