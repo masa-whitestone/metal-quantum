@@ -87,9 +87,6 @@ Qiskit's. Add a dedicated matrix entry if exact statevector parity matters.
 - **Duplicate secure backends**: `secure_backend.py` and
   `secure_mps_backend.py` overlap; consolidate to one module (both are
   currently referenced by different test files).
-- **Packaging**: the backend loads `native/build/libmetalq.dylib`; the stale
-  `metalq/lib/` artifacts and the wheel-packaging story (bundling the dylib +
-  metallib) need reconciling before distribution.
 - `native_wrapper.py` (secure ctypes wrapper) lags `backend.py`'s feature set
   (no `metalq_expectation`/`metalq_sample`/`metalq_gradient_adjoint_energy`).
 - Early-return error paths in `metalq_gradient_adjoint_energy` drop pooled

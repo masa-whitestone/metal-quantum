@@ -14,7 +14,7 @@ to the contrary.
 
 ```
 metalq/backends/mps/backend.py      ctypes marshaling, timeouts, validation
-        │  (loads native/build/libmetalq.dylib — NOT metalq/lib/)
+        │  (loads metalq/lib/libmetalq.dylib, or an absolute METALQ_NATIVE_LIB; never the CWD)
 native/include/metalq.h             C API: mq_gate_t, mq_hamiltonian_t, mq_complex_t
 native/src/metalq.m                 context lifecycle, dladdr-based .metallib resolution
 native/src/state_vector.m           buffer pool (mq_pool_acquire/release), GPU-side statevector init
@@ -29,11 +29,14 @@ native/src/adjoint.metal            pauli_expectation / pauli_inner_product / pa
 ## Build & verify loop
 
 ```bash
-cd native && make clean && make && cd ..          # → native/build/{libmetalq.dylib,default.metallib}
+cd native && make clean && make && cd ..          # → native/build/, copied to metalq/lib/
 .venv/bin/python -m pytest tests/test_gpu_correctness.py -q   # GPU vs CPU float64 reference
 ```
 
-- The backend loads from `native/build/`; stale `metalq/lib/` copies are ignored.
+- The backend loads only `metalq/lib/` (resolved from `__file__`), which every
+  `make` refreshes. To try another build, set `METALQ_NATIVE_LIB` to its
+  absolute path (relative paths are rejected; `default.metallib` must sit next
+  to it). Nothing is loaded from the current directory (CWE-427).
 - Adding a new `.metal` file requires editing the Makefile: `$(METALLIB)` lists
   source `.metal` files explicitly and links their `.air` outputs into ONE
   `default.metallib`. New `.m` files are picked up by the `$(SRC_DIR)/*.m` wildcard.

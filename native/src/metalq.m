@@ -39,30 +39,20 @@ mq_context_t metalq_create_context(void) {
 
       // Resolve the directory this dylib itself was loaded from via dladdr on
       // one of our own exported symbols. The build places libmetalq.dylib and
-      // default.metallib side by side in native/build/, so this normally
-      // finds the library regardless of the caller's CWD. Tried first, before
-      // the CWD-relative fallbacks below.
+      // default.metallib side by side (native/build/ and metalq/lib/), so this
+      // finds the shaders regardless of the caller's CWD. Paths relative to
+      // the current working directory are deliberately not searched
+      // (CWE-427): the shaders must come from the same trusted directory as
+      // the dylib.
       Dl_info info;
       if (dladdr((void *)metalq_create_context, &info) && info.dli_fname) {
         NSString *dylibPath = [NSString stringWithUTF8String:info.dli_fname];
         NSString *dylibDir = [dylibPath stringByDeletingLastPathComponent];
-        [searchPaths
-            addObject:[dylibDir stringByAppendingPathComponent:@"default.metallib"]];
+        if ([dylibDir isAbsolutePath]) {
+          [searchPaths addObject:[dylibDir stringByAppendingPathComponent:
+                                               @"default.metallib"]];
+        }
       }
-
-      [searchPaths addObjectsFromArray:@[
-        @"./default.metallib",                  // Current dir
-        @"native/build/default.metallib",       // From project root
-        @"../native/build/default.metallib",    // From examples/
-        @"../../native/build/default.metallib", // From deep nesting
-        @"build/default.metallib",              // Direct build
-        [NSString stringWithFormat:@"%@/native/build/default.metallib",
-                                   [[[NSFileManager defaultManager]
-                                       currentDirectoryPath]
-                                       stringByDeletingLastPathComponent]],
-        [NSString stringWithFormat:@"%@/build/default.metallib",
-                                   [[NSBundle mainBundle] resourcePath]]
-      ]];
 
       for (NSString *path in searchPaths) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {

@@ -43,6 +43,11 @@ build stops installation. `make` (or `make install`) builds the native library a
 shaders in `native/build/` and copies them to `metalq/lib/`. It does not install
 the Python package; use the pip command above for that step.
 
+The MPS backend loads only the copy in `metalq/lib/`. To use another build,
+set `METALQ_NATIVE_LIB` to the absolute path of its `libmetalq.dylib`
+(relative paths are rejected, and `default.metallib` must be in the same
+directory). Nothing is loaded from the current directory.
+
 For contributor dependencies, use `python -m pip install -e ".[dev]"` instead.
 See [the contribution guide](https://github.com/masa-whitestone/metal-quantum/blob/main/CONTRIBUTING.md)
 for test commands. `make clean` removes the native build directory and the two

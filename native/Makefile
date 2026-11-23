@@ -16,9 +16,10 @@ TARGET_LIB = $(BUILD_DIR)/libmetalq.dylib
 METALLIB = $(BUILD_DIR)/default.metallib
 
 # Copy of the build products inside the Python package, so wheel/editable
-# installs ship working binaries (issue #7). The backend prefers native/build
-# in a dev tree and falls back to metalq/lib; the native dladdr lookup finds
-# default.metallib next to whichever dylib was loaded.
+# installs ship working binaries (issue #7). The Python backend loads only
+# metalq/lib (or an absolute METALQ_NATIVE_LIB path), never the current
+# directory; the native dladdr lookup loads default.metallib from the same
+# directory as the dylib.
 PYLIB_DIR = ../metalq/lib
 
 # Targets

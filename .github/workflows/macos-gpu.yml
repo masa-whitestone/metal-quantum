@@ -12,6 +12,7 @@ on:
       - 'metalq/adapters/**'
       - 'setup.py'
       - 'Makefile'
+      - 'tests/test_native_lib_search_path.py'
       - '.github/workflows/macos-gpu.yml'
   workflow_dispatch:
 
@@ -68,7 +69,7 @@ jobs:
           python -m pytest -rs -p no:cacheprovider \
             tests/test_gpu_correctness.py tests/test_backend_mps.py \
             tests/test_qiskit_adapter.py tests/test_qiskit_export.py \
-            tests/test_native_packaging.py
+            tests/test_native_packaging.py tests/test_native_lib_search_path.py
 
       - name: Global-phase checks (MPS vs CPU vs Qiskit)
         run: |

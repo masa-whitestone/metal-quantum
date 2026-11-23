@@ -30,6 +30,11 @@ Python package installation is handled by the pip command above. To force a
 fresh native build, run `make clean` first; this removes the build directory and
 both packaged binaries.
 
+The MPS backend loads only the copy in `metalq/lib/`. To use another build,
+set `METALQ_NATIVE_LIB` to the absolute path of its `libmetalq.dylib`
+(relative paths are rejected, and `default.metallib` must be in the same
+directory). Nothing is loaded from the current directory.
+
 ## Running Tests
 
 ```bash
