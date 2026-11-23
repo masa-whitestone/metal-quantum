@@ -17,6 +17,10 @@ This delegates to `native/Makefile`, compiles Objective-C and Metal sources unde
 `make install` is an alias for the same build/copy operation. `make clean` removes
 both the native build directory and these packaged binaries. See
 `docs/installation.md` for Metal toolchain setup.
+The MPS backend loads only the copy in `metalq/lib/`. To use another build,
+set `METALQ_NATIVE_LIB` to the absolute path of its `libmetalq.dylib`
+(relative paths are rejected, and `default.metallib` must be in the same
+directory). Nothing is loaded from the current directory.
 
 ### Install package (editable)
 ```bash

@@ -84,6 +84,16 @@ def _marshal_sx(name, qubit):
         yield native
 
 
+# Native library location. Resolved once, at import time, from this module's
+# own absolute path so a later os.chdir() cannot change it.
+LIB_NAME = "libmetalq.dylib"
+METALLIB_NAME = "default.metallib"
+NATIVE_LIB_ENV_VAR = "METALQ_NATIVE_LIB"
+_PACKAGE_LIB_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lib")
+)
+
+
 class MPSBackend(Backend):
     """
     GPU-accelerated backend using Apple Metal Performance Shaders.
@@ -231,38 +241,55 @@ class MPSBackend(Backend):
             )
 
     def _load_library(self):
-        """Load the native shared library with security validation."""
-        lib_name = "libmetalq.dylib"
-        # Secure search paths (avoid system directories that could be compromised).
-        # Dev-tree builds (native/build) take priority over the packaged copy so
-        # a fresh `make` always wins during development.
-        paths = [
-            os.path.abspath(f"native/build/{lib_name}"),
-            os.path.join(os.path.dirname(__file__), "../../../native/build", lib_name),
-            os.path.join(os.path.dirname(__file__), "../../../../native/build", lib_name),
-            # Wheel/editable installs: binaries shipped inside the package
-            # (metalq/lib, populated by `make` — default.metallib sits next to
-            # the dylib, where the native dladdr lookup finds it).
-            os.path.join(os.path.dirname(__file__), "../../lib", lib_name),
-            # Avoid /usr/local/lib for security - can be world-writable
-            os.path.expanduser(f"~/.metalq/lib/{lib_name}"),
-        ]
+        """Load the native shared library from a trusted, absolute location.
 
-        for path in paths:
-            if os.path.exists(path):
-                # Validate library before loading
-                if self._validate_library(path):
-                    try:
-                        logger.info(f"Loading library from {path}")
-                        lib = ctypes.CDLL(path)
-                        # Verify library has expected functions
-                        self._verify_library_interface(lib)
-                        return lib
-                    except OSError as e:
-                        logger.warning(f"Failed to load library from {path}: {e}")
-                        continue
+        By default only the copy shipped inside the package (``metalq/lib``,
+        resolved from this module's ``__file__``) is considered. The current
+        working directory is never searched (CWE-427): ``ctypes.CDLL`` runs a
+        dylib's initializers as soon as it is opened, so a library picked up
+        from an untrusted directory would execute code in this process.
 
-        return None
+        A developer build can be selected explicitly with the
+        ``METALQ_NATIVE_LIB`` environment variable, which must be an absolute
+        path to ``libmetalq.dylib``. Relative paths are rejected.
+        """
+        override = os.environ.get(NATIVE_LIB_ENV_VAR, "")
+        if override:
+            if not os.path.isabs(override):
+                raise LibraryLoadError(
+                    f"{NATIVE_LIB_ENV_VAR} must be an absolute path to "
+                    f"{LIB_NAME}; relative paths are rejected"
+                )
+            if not os.path.isfile(override):
+                raise LibraryLoadError(
+                    f"{NATIVE_LIB_ENV_VAR} does not point to an existing file"
+                )
+            path = override
+        else:
+            path = os.path.join(_PACKAGE_LIB_DIR, LIB_NAME)
+            if not os.path.isfile(path):
+                logger.debug(f"Packaged native library not found at {path}")
+                return None
+
+        # The native side loads default.metallib from the directory that holds
+        # the dylib. Require it to be there so the shaders always come from the
+        # same trusted directory as the library itself.
+        metallib = os.path.join(os.path.dirname(path), METALLIB_NAME)
+        if not os.path.isfile(metallib):
+            raise LibraryLoadError(
+                f"{METALLIB_NAME} not found next to {LIB_NAME}"
+            )
+
+        if not self._validate_library(path):
+            raise LibraryLoadError(f"Refusing to load {LIB_NAME}: validation failed")
+
+        try:
+            lib = ctypes.CDLL(path)
+        except OSError as e:
+            raise LibraryLoadError(f"Failed to load {LIB_NAME}: {e}") from e
+        self._verify_library_interface(lib)
+        logger.debug(f"Loaded native library from {path}")
+        return lib
 
     def _validate_library(self, filepath: str) -> bool:
         """Validate library file for security."""
