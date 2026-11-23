@@ -1,9 +1,10 @@
 name: Release
 
-# Pushing a tag vX.Y.Z builds the sdist and wheel on Apple Silicon (the wheel
-# carries the compiled libmetalq.dylib and default.metallib), checks the
-# built wheel end to end, and publishes to PyPI with Trusted Publishing
-# (OIDC). No PyPI API token is stored in the repository.
+# Pushing a tag vX.Y.Z, or running this workflow by hand on main, builds the
+# sdist and wheel on Apple Silicon (the wheel carries the compiled
+# libmetalq.dylib and default.metallib), checks the built wheel end to end,
+# and publishes to PyPI with Trusted Publishing (OIDC). No PyPI API token is
+# stored in the repository.
 #
 # One-time PyPI setup: project metalq -> Manage -> Publishing -> GitHub
 # publisher with owner masa-whitestone, repository metal-quantum, workflow
@@ -11,6 +12,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,11 +42,18 @@ jobs:
             xcrun -sdk macosx metal --version
           fi
 
-      - name: Tag matches the package version
+      - name: Release ref and version
         run: |
           version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          echo "tag=$GITHUB_REF_NAME version=$version"
-          test "v$version" = "$GITHUB_REF_NAME"
+          echo "event=$GITHUB_EVENT_NAME ref=$GITHUB_REF version=$version"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            test "v$version" = "$GITHUB_REF_NAME"
+          else
+            test "$GITHUB_REF" = "refs/heads/main"
+          fi
+          status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/metalq/$version/json")
+          echo "PyPI metalq $version: HTTP $status"
+          test "$status" = "404"
 
       - name: Build sdist and wheel
         run: |
