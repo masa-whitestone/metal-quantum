@@ -96,11 +96,8 @@ def test_package_lib_dir_is_absolute_and_based_on_file(attacker_cwd):
 
 def test_cwd_native_build_is_ignored_packaged_copy_loaded(
         clean_env, cdll_calls, attacker_cwd, packaged_dir):
-    backend = MPSBackend()
-    try:
-        assert cdll_calls == [str(packaged_dir / LIB)]
-    finally:
-        backend.__del__()
+    MPSBackend()
+    assert cdll_calls == [str(packaged_dir / LIB)]
 
 
 def test_cwd_native_build_is_ignored_without_packaged_copy(
@@ -193,9 +190,10 @@ def test_real_dylib_planted_in_cwd_is_not_loaded(clean_env, tmp_path, monkeypatc
         shutil.copy2(os.path.join(mps_backend._PACKAGE_LIB_DIR, name), planted / name)
     monkeypatch.chdir(cwd)
 
+    # Let the backend be released normally: calling __del__() by hand as well
+    # would destroy the native context twice.
     backend = MPSBackend()
-    try:
-        assert os.path.samefile(backend._lib._name, packaged)
-        assert not os.path.samefile(backend._lib._name, planted / LIB)
-    finally:
-        backend.__del__()
+    loaded = backend._lib._name
+    del backend
+    assert os.path.samefile(loaded, packaged)
+    assert not os.path.samefile(loaded, planted / LIB)
